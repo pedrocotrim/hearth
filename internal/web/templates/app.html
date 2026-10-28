@@ -1,0 +1,632 @@
+{{define "head"}}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"responseHandling":[{"code":"204","swap":false},{"code":"422","swap":true},{"code":"429","swap":true},{"code":"[23]..","swap":true},{"code":"[45]..","swap":false,"error":true}]}'>
+<title>{{.Title}} · Hearth</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/ui.js" defer></script>
+{{end}}
+
+{{define "mark"}}
+<svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+  <rect width="32" height="32" rx="8" fill="#c4622d"/>
+  <path fill="#fff7ee" d="M16.2 6.5c.2 3.2 1.6 4.8 3.2 6.2 1.8 1.6 3.6 3.2 3.6 6.3 0 3.7-3 6.5-6.8 6.5s-6.8-2.8-6.8-6.5c0-2.2.8-3.8 2.1-5.2.7 1.5 1.6 2.2 2.7 2.2.2-2.4-.2-4.6-.1-6.5.7 1.2 1.4 2.1 2.1 3z"/>
+</svg>
+{{end}}
+
+{{define "brand"}}
+<span class="brand">
+  {{template "mark" .}}
+  <span><strong>Hearth</strong><small>Household ledger</small></span>
+</span>
+{{end}}
+
+{{define "alert"}}
+{{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
+{{end}}
+
+{{define "auth"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+  <div id="csrf" data-token="{{.CSRF}}" hidden></div>
+  <div class="auth-body" hx-boost="true">
+    <main class="auth-card" id="main">
+      {{template "brand" .}}
+      {{.Body}}
+      <p class="fine">© {{.Year}} Hearth</p>
+    </main>
+  </div>
+</body>
+</html>
+{{end}}
+
+{{define "app"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div id="csrf" data-token="{{.CSRF}}" hidden></div>
+  <div class="shell" hx-boost="true">
+    <aside class="sidebar">
+      <a class="brand" href="/">{{template "mark" .}}<span><strong>Hearth</strong><small>Household ledger</small></span></a>
+      {{if .HasHousehold}}
+        {{if gt (len .Households) 1}}
+        <form class="switcher" method="post" action="/households/switch">
+          <input type="hidden" name="_csrf" value="{{.CSRF}}">
+          <label class="sr-only" for="household">Household</label>
+          <select id="household" name="household_id">
+            {{range .Households}}
+            <option value="{{.ID}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>
+            {{end}}
+          </select>
+          <button class="btn tiny" type="submit">Switch</button>
+        </form>
+        {{else}}
+        <p class="household-name">{{.HouseholdName}}</p>
+        {{end}}
+        <nav aria-label="Primary">
+          <a href="/" class="{{if eq .Active "ledger"}}active{{end}}">Ledger</a>
+          <a href="/bills" class="{{if eq .Active "bills"}}active{{end}}">Bills</a>
+          <a href="/utilities" class="{{if eq .Active "utilities"}}active{{end}}">Utilities</a>
+          <a href="/members" class="{{if eq .Active "members"}}active{{end}}">Members</a>
+        </nav>
+      {{end}}
+      <div class="side-foot">
+        <p class="who"><strong>{{.UserName}}</strong><span>{{.UserEmail}}</span></p>
+        <form method="post" action="/logout">
+          <input type="hidden" name="_csrf" value="{{.CSRF}}">
+          <button class="linkish" type="submit">Log out</button>
+        </form>
+      </div>
+    </aside>
+    <div class="workspace">
+      <main id="main">
+        {{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
+        {{.Body}}
+      </main>
+    </div>
+  </div>
+</body>
+</html>
+{{end}}
+
+{{define "login"}}
+<h1>Log in</h1>
+<p class="lede">Split utility bills with the people you live with.</p>
+{{if .InviteHousehold}}<p class="notice">You're joining {{.InviteHousehold}}.</p>{{end}}
+{{template "alert" .}}
+<form method="post" action="/oauth/authorize" class="stack">
+  <input type="hidden" name="_csrf" value="{{.CSRF}}">
+  <input type="hidden" name="client_id" value="{{.ClientID}}">
+  <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+  <input type="hidden" name="state" value="{{.OAuthState}}">
+  <input type="hidden" name="response_type" value="code">
+  {{if .Token}}<input type="hidden" name="invite" value="{{.Token}}">{{end}}
+  <label>Email<input type="email" name="email" autocomplete="username" required value="{{.Email}}"></label>
+  <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+  <button class="btn primary" type="submit">Log in</button>
+</form>
+<p class="muted">New here? <a href="/register{{if .Token}}?invite={{.Token}}{{end}}">Create an account</a></p>
+{{end}}
+
+{{define "register"}}
+<h1>Create your account</h1>
+{{if .InviteHousehold}}
+<p class="lede">This account joins {{.InviteHousehold}} as {{.InviteEmail}}.</p>
+{{else}}
+<p class="lede">Then you'll make a household and start the ledger.</p>
+{{end}}
+{{template "alert" .}}
+<form method="post" action="/register" class="stack">
+  <input type="hidden" name="_csrf" value="{{.CSRF}}">
+  <input type="hidden" name="client_id" value="{{.ClientID}}">
+  <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+  <input type="hidden" name="state" value="{{.OAuthState}}">
+  <input type="hidden" name="response_type" value="code">
+  {{if .Token}}<input type="hidden" name="invite" value="{{.Token}}">{{end}}
+  <label>Name<input name="name" autocomplete="name" required maxlength="80" value="{{.Name}}"></label>
+  <label>Email<input type="email" name="email" autocomplete="username" required value="{{.Email}}" {{if .Token}}readonly{{end}}></label>
+  <label>Password<input type="password" name="password" autocomplete="new-password" required minlength="10" maxlength="72"></label>
+  <button class="btn primary" type="submit">Create account</button>
+</form>
+<p class="muted">Already have an account? <a href="/login{{if .Token}}?invite={{.Token}}{{end}}">Log in</a></p>
+{{end}}
+
+{{define "invite"}}
+<h1>{{if .InviteHousehold}}Join {{.InviteHousehold}}{{else}}Invite{{end}}</h1>
+{{template "alert" .}}
+{{if .InviteEmail}}<p class="lede">This invite is for {{.InviteEmail}}.</p>{{end}}
+{{if .AlreadyMember}}
+  <p>You're already in this household.</p>
+  <a class="btn primary" href="/">Go to the ledger</a>
+{{else if .EmailMismatch}}
+  <p>You're logged in as {{.UserEmail}}. Log out, then sign in as {{.InviteEmail}}.</p>
+  <form method="post" action="/logout">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <button class="btn" type="submit">Log out</button>
+  </form>
+{{else if .LoggedIn}}
+  <form method="post" action="/invites/{{.Token}}/accept">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <button class="btn primary" type="submit">Join household</button>
+  </form>
+{{else if .Token}}
+  <div class="cluster">
+    <a class="btn primary" href="/register?invite={{.Token}}">Create account</a>
+    <a class="btn" href="/login?invite={{.Token}}">Log in</a>
+  </div>
+{{else}}
+  <p class="muted"><a href="/login">Back to log in</a></p>
+{{end}}
+{{end}}
+
+{{define "household-form"}}
+<form method="post" action="/households" class="stack">
+  <input type="hidden" name="_csrf" value="{{.CSRF}}">
+  {{if .HasHousehold}}<input type="hidden" name="from" value="members">{{end}}
+  <label>Household name<input name="name" required maxlength="80" value="{{.DraftName}}"></label>
+  <label>Currency
+    <select name="currency">
+      {{range .Currencies}}
+      <option value="{{.}}" {{if eq $.DraftCurrency .}}selected{{end}}>{{.}}</option>
+      {{end}}
+    </select>
+  </label>
+  <button class="btn primary" type="submit">{{if .HasHousehold}}Create household{{else}}Create and continue{{end}}</button>
+</form>
+{{end}}
+
+{{define "onboarding"}}
+<h1>Start a household</h1>
+<p class="lede">A household is the group of people who share the electric bill, the water bill, and the rest.</p>
+{{template "alert" .}}
+{{template "household-form" .}}
+{{end}}
+
+{{define "dashboard"}}
+<header class="page-head">
+  <div>
+    <h1>{{.HouseholdName}}</h1>
+    <p class="lede">Who has paid, and who still owes.</p>
+  </div>
+  {{if .HasUtilities}}<a class="btn primary" href="/bills/new">Record a bill</a>{{else}}<a class="btn primary" href="/utilities">Add a utility</a>{{end}}
+</header>
+{{template "alert" .}}
+{{if .ShowSetup}}
+<section class="panel">
+  <h2>Set up the ledger</h2>
+  <ol class="steps">
+    <li class="done">Household created</li>
+    <li><a href="/members">Invite the people who share these bills</a> <span class="muted">{{.MemberCount}} so far</span></li>
+    <li><a href="/utilities">Add each utility you split</a></li>
+    <li>{{if .HasUtilities}}<a href="/bills/new">Record the first bill</a>{{else}}<span class="muted">Record a bill after a utility exists</span>{{end}}</li>
+  </ol>
+</section>
+{{else}}
+<section class="stats">
+  <article><span>You owe</span><strong>{{.YouOwe}}</strong></article>
+  <article><span>Owed to you</span><strong>{{.OwedToYou}}</strong></article>
+  <article><span>Bills in progress</span><strong>{{.AttentionCount}}</strong></article>
+</section>
+<section class="panel">
+  <h2>Who owes whom</h2>
+  {{if .BalanceLines}}
+  <ul class="balances">
+    {{range .BalanceLines}}
+    <li class="{{if .Yours}}yours{{end}}"><span>{{.Text}}</span><strong>{{.Amount}}</strong></li>
+    {{end}}
+  </ul>
+  <p class="fine">Balances are netted across bills between each pair. The person who paid the provider is the one owed.</p>
+  {{else}}
+  <p>Everyone is square.</p>
+  {{end}}
+</section>
+{{if .Attention}}
+<section class="panel">
+  <div class="section-head"><h2>Needs attention</h2><a href="/bills">All bills</a></div>
+  {{template "bill-table" .}}
+</section>
+{{else if .SettledUp}}
+<p class="fine">Every recorded bill is settled.</p>
+{{end}}
+{{end}}
+{{end}}
+
+{{define "bill-table"}}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Bill</th><th>Period</th><th>Due</th><th>Total</th><th>Status</th><th>Your part</th></tr>
+    </thead>
+    <tbody>
+      {{range .Attention}}
+      <tr>
+        <td><a href="/bills/{{.ID}}">{{.Utility}}</a><span class="muted block">{{.Category}}</span></td>
+        <td>{{.Period}}</td>
+        <td class="{{.DueClass}}">{{.Due}}{{if eq .DueClass "overdue"}} · past due{{end}}</td>
+        <td class="num">{{.Amount}}</td>
+        <td><span class="status {{.Status}}">{{.StatusLabel}}</span></td>
+        <td>{{.Yours}}</td>
+      </tr>
+      {{end}}
+      {{range .BillRows}}
+      <tr>
+        <td><a href="/bills/{{.ID}}">{{.Utility}}</a><span class="muted block">{{.Category}}</span></td>
+        <td>{{.Period}}</td>
+        <td class="{{.DueClass}}">{{.Due}}{{if eq .DueClass "overdue"}} · past due{{end}}</td>
+        <td class="num">{{.Amount}}</td>
+        <td><span class="status {{.Status}}">{{.StatusLabel}}</span></td>
+        <td>{{.Yours}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+{{define "bills"}}
+<header class="page-head">
+  <div>
+    <h1>Bills</h1>
+    <p class="lede">Each bill keeps the split it was given, even if the household changes later.</p>
+  </div>
+  <a class="btn primary" href="/bills/new">Record a bill</a>
+</header>
+{{template "alert" .}}
+<div class="filters" role="tablist">
+  <a class="{{if eq .Filter "all"}}on{{end}}" href="/bills">All</a>
+  <a class="{{if eq .Filter "unpaid"}}on{{end}}" href="/bills?status=unpaid">Not paid</a>
+  <a class="{{if eq .Filter "open"}}on{{end}}" href="/bills?status=open">Settling</a>
+  <a class="{{if eq .Filter "settled"}}on{{end}}" href="/bills?status=settled">Settled</a>
+</div>
+{{if .BillRows}}
+{{template "bill-table" .}}
+{{else}}
+<p class="empty">No bills in this view.</p>
+{{end}}
+{{end}}
+
+{{define "split-fields"}}
+<div id="split-fields" class="stack">
+  <input type="hidden" name="includes_sent" value="1">
+  <input type="hidden" name="applied_utility" value="{{.Form.AppliedUtility}}">
+  <fieldset class="stack">
+    <legend>Who shares this bill</legend>
+    <p class="fine">Everyone is included unless you uncheck them. A utility can start some people unchecked.</p>
+    <div class="people-grid">
+      {{range .People}}
+      <label class="check">
+        <input type="checkbox" name="include_{{.ID}}" value="1" {{if .Included}}checked{{end}}
+          hx-get="/bills/split-fields" hx-trigger="change" hx-target="#split-fields" hx-swap="outerHTML" hx-include="#bill-form" hx-push-url="false">
+        {{.Name}}{{if not .HasAccount}} <span class="muted">no account</span>{{end}}
+      </label>
+      {{end}}
+    </div>
+  </fieldset>
+  {{if eq .Form.SplitMethod "weights"}}
+  <div class="people-grid">
+    {{range .People}}{{if .Included}}
+    {{$w := index $.Form.Weights .ID}}
+    <label>{{.Name}}
+      <input type="number" min="0" max="100" step="1" name="weight_{{.ID}}" value="{{if $w}}{{$w}}{{else}}1{{end}}" inputmode="numeric"
+        hx-get="/bills/split-fields" hx-trigger="change, keyup delay:300ms" hx-target="#split-fields" hx-swap="outerHTML" hx-include="#bill-form" hx-push-url="false">
+    </label>
+    {{end}}{{end}}
+  </div>
+  {{else if eq .Form.SplitMethod "amounts"}}
+  <div class="people-grid">
+    {{range .People}}{{if .Included}}
+    <label>{{.Name}}
+      <input name="amount_{{.ID}}" inputmode="decimal" value="{{index $.Form.Amounts .ID}}" placeholder="0.00"
+        hx-get="/bills/split-fields" hx-trigger="change, keyup delay:300ms" hx-target="#split-fields" hx-swap="outerHTML" hx-include="#bill-form" hx-push-url="false">
+    </label>
+    {{end}}{{end}}
+  </div>
+  {{end}}
+  {{if .Form.PreviewError}}
+  <p class="field-error">{{.Form.PreviewError}}</p>
+  {{else if .Form.Preview}}
+  <ul class="preview">
+    {{range .Form.Preview}}
+    <li><span>{{.Name}}</span><strong>{{.Amount}}</strong></li>
+    {{end}}
+  </ul>
+  {{end}}
+  {{with index .Fields "split"}}<p class="field-error">{{.}}</p>{{end}}
+  {{if ne .Form.SplitMethod "amounts"}}
+  <p class="fine">Shares are rounded to the cent. Leftover cents go to members in a stable order so the total matches the bill.</p>
+  {{end}}
+</div>
+{{end}}
+
+{{define "bill-new"}}
+<header class="page-head">
+  <div>
+    <h1>Record a bill</h1>
+    <p class="lede">Everyone starts included. Uncheck someone to leave them off this bill. The split is saved with the bill.</p>
+  </div>
+</header>
+{{template "alert" .}}
+<form id="bill-form" class="stack panel" method="post" action="/bills">
+  <input type="hidden" name="_csrf" value="{{.CSRF}}">
+  <label>Utility
+    <select name="utility_id" required
+      hx-get="/bills/split-fields" hx-trigger="change" hx-target="#split-fields" hx-swap="outerHTML" hx-include="#bill-form" hx-push-url="false">
+      <option value="">Choose</option>
+      {{range .Utilities}}
+      <option value="{{.ID}}" {{if eq $.Form.UtilityID .ID}}selected{{end}}>{{.Label}}</option>
+      {{end}}
+    </select>
+  </label>
+  {{with index .Fields "utility_id"}}<p class="field-error">{{.}}</p>{{end}}
+  <div class="dates">
+    <label>Period start<input type="date" name="period_start" required value="{{.Form.PeriodStart}}"></label>
+    <label>Period end<input type="date" name="period_end" required value="{{.Form.PeriodEnd}}"></label>
+    <label>Due<input type="date" name="due_date" required value="{{.Form.DueDate}}"></label>
+  </div>
+  {{with index .Fields "period_start"}}<p class="field-error">{{.}}</p>{{end}}
+  {{with index .Fields "period_end"}}<p class="field-error">{{.}}</p>{{end}}
+  {{with index .Fields "due_date"}}<p class="field-error">{{.}}</p>{{end}}
+  <label>Amount ({{.Currency}})
+    <input name="amount" inputmode="decimal" required placeholder="0.00" value="{{.Form.Amount}}"
+      hx-get="/bills/split-fields" hx-trigger="keyup changed delay:300ms, change" hx-target="#split-fields" hx-swap="outerHTML" hx-include="#bill-form" hx-push-url="false">
+  </label>
+  {{with index .Fields "amount"}}<p class="field-error">{{.}}</p>{{end}}
+  <label>Who paid the provider?
+    <select name="paid_by">
+      <option value="" {{if eq .Form.PaidBy ""}}selected{{end}}>Not paid yet</option>
+      {{range .People}}
+      <option value="{{.ID}}" {{if eq $.Form.PaidBy .ID}}selected{{end}}>{{.Name}}</option>
+      {{end}}
+    </select>
+  </label>
+  <p class="fine">Until someone pays the company, nobody owes anyone else. After that, the others owe the person who paid.</p>
+  {{with index .Fields "paid_by"}}<p class="field-error">{{.}}</p>{{end}}
+  <label>How to split
+    <select name="split_method" hx-get="/bills/split-fields" hx-trigger="change" hx-target="#split-fields" hx-swap="outerHTML" hx-include="#bill-form" hx-push-url="false">
+      <option value="equal" {{if eq .Form.SplitMethod "equal"}}selected{{end}}>Split equally</option>
+      <option value="weights" {{if eq .Form.SplitMethod "weights"}}selected{{end}}>Split by weight</option>
+      <option value="amounts" {{if eq .Form.SplitMethod "amounts"}}selected{{end}}>Custom amounts</option>
+    </select>
+  </label>
+  {{template "split-fields" .}}
+  <label>Invoice reference<input name="invoice_ref" maxlength="80" value="{{.Form.InvoiceRef}}"></label>
+  {{with index .Fields "invoice_ref"}}<p class="field-error">{{.}}</p>{{end}}
+  <label>Note<textarea name="notes" maxlength="500">{{.Form.Notes}}</textarea></label>
+  {{with index .Fields "notes"}}<p class="field-error">{{.}}</p>{{end}}
+  <div class="cluster">
+    <button class="btn primary" type="submit">Record bill</button>
+    <a class="btn" href="/bills">Cancel</a>
+  </div>
+</form>
+{{end}}
+
+{{define "bill-show"}}
+<header class="page-head">
+  <div>
+    <p class="eyebrow">{{.Bill.Category}}{{if .Bill.Provider}} · {{.Bill.Provider}}{{end}}</p>
+    <h1>{{.Bill.Utility}}</h1>
+    <p class="lede">{{.Bill.Period}} · due {{.Bill.Due}}</p>
+  </div>
+  <div class="cluster">
+    <span class="status {{.Bill.Status}}">{{.Bill.StatusLabel}}</span>
+    <strong class="num total">{{.Bill.Amount}}</strong>
+  </div>
+</header>
+{{template "alert" .}}
+<section class="panel stack">
+  <p><span class="muted">Paid the provider</span> {{.Bill.Payer}}</p>
+  <p><span class="muted">Split</span> {{.Bill.SplitLabel}}</p>
+  {{if .Bill.InvoiceRef}}<p><span class="muted">Reference</span> {{.Bill.InvoiceRef}}</p>{{end}}
+  {{if .Bill.Notes}}<p class="notes">{{.Bill.Notes}}</p>{{end}}
+  <p class="fine">Recorded {{.Bill.Recorded}}</p>
+  {{if .Bill.AwaitingPayer}}
+  <form method="post" action="/bills/{{.Bill.ID}}/pay-provider" class="stack">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label>Who paid the provider?
+      <select name="payer_id">
+        {{range .People}}
+        <option value="{{.ID}}">{{.Name}}</option>
+        {{end}}
+      </select>
+    </label>
+    <button class="btn primary" type="submit">Record provider payment</button>
+  </form>
+  {{end}}
+</section>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Person</th>
+        {{if .Bill.ShowWeights}}<th>Weight</th>{{end}}
+        <th>Share</th>
+        <th>Paid back</th>
+        <th>Left</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Bill.Shares}}
+      <tr>
+        <td>{{.Name}}</td>
+        {{if $.Bill.ShowWeights}}<td>{{.Weight}}</td>{{end}}
+        <td class="num">{{.Amount}}</td>
+        <td class="num">{{.Paid}}</td>
+        <td class="num">{{.Left}}</td>
+        <td>
+          {{if .Payable}}
+          <form class="pay" method="post" action="/bills/{{$.Bill.ID}}/payments">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="user_id" value="{{.UserID}}">
+            <input name="amount" inputmode="decimal" value="{{.LeftInput}}" aria-label="Payment from {{.Name}}">
+            <button class="btn tiny" type="submit">Record</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{if .Bill.CanDelete}}
+<form method="post" action="/bills/{{.Bill.ID}}/delete">
+  <input type="hidden" name="_csrf" value="{{.CSRF}}">
+  <button class="btn danger" type="submit" hx-confirm="Delete this bill? This cannot be undone.">Delete bill</button>
+</form>
+{{end}}
+{{end}}
+
+{{define "utilities"}}
+<header class="page-head">
+  <div>
+    <h1>Utilities</h1>
+    <p class="lede">Electricity, water, internet, rent — whatever this household splits.</p>
+  </div>
+</header>
+{{template "alert" .}}
+<form method="post" action="/utilities" class="panel stack">
+  <input type="hidden" name="_csrf" value="{{.CSRF}}">
+  <div class="dates">
+    <label>Name<input name="name" required maxlength="80" value="{{.Name}}"></label>
+    <label>Provider<input name="provider" maxlength="80" value="{{.Provider}}"></label>
+    <label>Category
+      <select name="category">
+        {{range .Categories}}
+        <option value="{{.Value}}" {{if or (eq $.SelectedCategory .Value) (and (eq $.SelectedCategory "") (eq .Value "electric"))}}selected{{end}}>{{.Label}}</option>
+        {{end}}
+      </select>
+    </label>
+  </div>
+  {{if .People}}
+  <fieldset class="stack">
+    <legend>Leave off by default</legend>
+    <div class="people-grid">
+      {{range .People}}
+      <label class="check"><input type="checkbox" name="exempt_{{.ID}}" value="1"> {{.Name}}</label>
+      {{end}}
+    </div>
+  </fieldset>
+  {{end}}
+  <button class="btn primary" type="submit">Add utility</button>
+</form>
+{{if .UtilityRows}}
+<div class="stack">
+  {{range .UtilityRows}}
+  <section class="panel stack">
+    <h2>{{.Name}}</h2>
+    <p class="muted">{{.Provider}} · {{.Category}}</p>
+    <form method="post" action="/utilities/{{.ID}}/exemptions" class="stack">
+      <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+      <p class="fine">People checked here start unchecked on a new bill for this utility.</p>
+      <div class="people-grid">
+        {{range .People}}
+        <label class="check"><input type="checkbox" name="exempt_{{.ID}}" value="1" {{if .Exempt}}checked{{end}}> {{.Name}}</label>
+        {{end}}
+      </div>
+      <button class="btn" type="submit">Save defaults</button>
+    </form>
+  </section>
+  {{end}}
+</div>
+{{else}}
+<p class="empty">No utilities yet.</p>
+{{end}}
+{{end}}
+
+{{define "members"}}
+<header class="page-head">
+  <div>
+    <h1>Members</h1>
+    <p class="lede">Amounts in this household are labeled in {{.Currency}}.</p>
+  </div>
+</header>
+{{template "alert" .}}
+<section class="panel stack">
+  <h2>Add someone without an account</h2>
+  <p class="fine">They can be on a bill now. Send an invite later if they should sign in. Use the same email and the invite links to this person.</p>
+  <form method="post" action="/members/participants" class="cluster">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label class="grow">Name<input name="name" required maxlength="80"></label>
+    <label class="grow">Email<input type="email" name="email"></label>
+    <button class="btn" type="submit">Add</button>
+  </form>
+</section>
+{{if .IsOwner}}
+<section class="panel stack">
+  <h2>Invite someone</h2>
+  <p class="fine">They must create an account with this exact email. The link works once and expires in 14 days.</p>
+  <form method="post" action="/members/invite" class="cluster">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label class="grow">Email<input type="email" name="email" required></label>
+    <button class="btn primary" type="submit">Create invite</button>
+  </form>
+  {{if .InviteURL}}
+  <div class="invite-box">
+    <label for="invite-link">Invite link</label>
+    <div class="cluster">
+      <input id="invite-link" readonly value="{{.InviteURL}}">
+      <button class="btn" type="button" data-copy="invite-link">Copy</button>
+    </div>
+  </div>
+  {{end}}
+</section>
+{{end}}
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Joined</th><th></th></tr></thead>
+    <tbody>
+      {{range .MemberRows}}
+      <tr>
+        <td>{{.Name}}{{if .IsSelf}} <span class="muted">you</span>{{end}}</td>
+        <td>{{.Email}}</td>
+        <td>{{if .IsOwner}}Owner{{else if .HasAccount}}Member{{else}}No account{{end}}</td>
+        <td>{{.Joined}}</td>
+        <td>
+          {{if and $.IsOwner (not .IsSelf)}}
+          <form method="post" action="/members/{{.ID}}/remove">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+            <button class="linkish danger-text" type="submit" hx-confirm="Remove {{.Name}} from the household?">Remove</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{if and .IsOwner .InviteRows}}
+<section class="panel">
+  <h2>Pending invites</h2>
+  <ul class="balances">
+    {{range .InviteRows}}
+    <li>
+      <span>{{.Email}} <span class="muted">expires {{.Expires}}</span></span>
+      <form method="post" action="/invites/{{.ID}}/revoke">
+        <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+        <button class="linkish" type="submit">Revoke</button>
+      </form>
+    </li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
+<section class="panel stack">
+  <h2>{{if .IsOwner}}Household settings{{else}}Another household{{end}}</h2>
+  {{if .IsOwner}}
+  <form method="post" action="/households/settings" class="cluster">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label class="grow">Name<input name="name" required maxlength="80" value="{{.HouseholdName}}"></label>
+    <button class="btn" type="submit">Rename</button>
+  </form>
+  {{end}}
+  <h3>Start another household</h3>
+  {{template "household-form" .}}
+</section>
+{{end}}

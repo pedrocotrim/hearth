@@ -1,0 +1,17 @@
+services:
+  hearth:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      HEARTH_ADDR: ":8080"
+      HEARTH_DATA: /home/hearth/data/hearth.db
+      HEARTH_ENV: production
+      HEARTH_BASE_URL: http://localhost:8080
+      HEARTH_SECURE_COOKIES: "false"
+    volumes:
+      - hearth-data:/home/hearth/data
+    restart: unless-stopped
+
+volumes:
+  hearth-data:
