@@ -38,6 +38,10 @@ type View struct {
 	MemberCount    int
 	HasUtilities   bool
 	SettledUp      bool
+	Chart          string
+	ChartSVG       template.HTML
+	ChartLegend    []ChartSwatch
+	Latest         []BillRow
 
 	Filter   string
 	BillRows []BillRow
@@ -100,16 +104,17 @@ type BillRow struct {
 }
 
 type Person struct {
-	ID         string
-	Name       string
-	Email      string
-	Role       string
-	Joined     string
-	IsSelf     bool
-	IsOwner    bool
-	HasAccount bool
-	Included   bool
-	Exempt     bool
+	ID          string
+	Name        string
+	Email       string
+	Role        string
+	Joined      string
+	IsSelf      bool
+	IsOwner     bool
+	HasAccount  bool
+	Included    bool
+	Contributed string
+	Exempt      bool
 }
 
 type UtilityOption struct {
@@ -144,6 +149,7 @@ type BillForm struct {
 	IncludesSent   bool
 	AppliedUtility string
 	Include        map[string]bool
+	Paid           map[string]bool
 	Weights        map[string]string
 	Amounts        map[string]string
 	Preview        []SharePreview
@@ -187,6 +193,7 @@ type ShareRow struct {
 	Weight    int
 	Covered   bool
 	Payable   bool
+	CanClear  bool
 }
 
 type scope struct {

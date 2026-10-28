@@ -78,25 +78,55 @@ func (s *Store) migrate(ctx context.Context) error {
 	)`); err != nil {
 		return err
 	}
-	var v1, v2 int
+	var v1, v2, v3 int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 1`).Scan(&v1); err != nil {
 		return err
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 2`).Scan(&v2); err != nil {
 		return err
 	}
-	if v2 > 0 {
-		return nil
-	}
-	if v1 > 0 {
-		if err := s.migrateV2(ctx); err != nil {
-			return err
-		}
-	} else if err := execScript(ctx, s.db, schemaSQL); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 3`).Scan(&v3); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)`, time.Now().UTC().Format(time.RFC3339Nano))
+	if v3 > 0 {
+		return nil
+	}
+	if v1 == 0 && v2 == 0 {
+		if err := execScript(ctx, s.db, schemaSQL); err != nil {
+			return err
+		}
+	} else {
+		if v2 == 0 {
+			if err := s.migrateV2(ctx); err != nil {
+				return err
+			}
+		}
+		if err := s.migrateV3(ctx); err != nil {
+			return err
+		}
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)`, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+func (s *Store) migrateV3(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE bill_shares ADD COLUMN paid INTEGER NOT NULL DEFAULT 0 CHECK (paid IN (0, 1))`); err != nil {
+		return fmt.Errorf("migrate v3: %w", err)
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE bill_shares SET paid = 1
+		WHERE amount_cents <= (
+			SELECT COALESCE(SUM(amount_cents), 0)
+			FROM share_payments sp
+			WHERE sp.bill_id = bill_shares.bill_id AND sp.participant_id = bill_shares.participant_id
+		) AND amount_cents > 0 AND EXISTS (
+			SELECT 1 FROM share_payments sp
+			WHERE sp.bill_id = bill_shares.bill_id AND sp.participant_id = bill_shares.participant_id
+		)`)
+	if err != nil {
+		return fmt.Errorf("migrate v3: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) migrateV2(ctx context.Context) error {

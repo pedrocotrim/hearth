@@ -2,7 +2,9 @@ package web
 
 import (
 	"errors"
+	"html/template"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -47,6 +49,20 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	v.MemberCount = len(members)
 	v.HasUtilities = len(utils) > 0
 	v.SettledUp = len(bills) > 0 && len(attention) == 0
+	if len(bills) > 0 {
+		v.Chart = normalizeChart(r.URL.Query().Get("chart"))
+		svg, legend := spendingChart(bills, v.Chart)
+		v.ChartSVG = template.HTML(svg)
+		v.ChartLegend = legend
+		latest := append([]store.Bill(nil), bills...)
+		sort.Slice(latest, func(i, j int) bool {
+			return latest[i].CreatedAt.After(latest[j].CreatedAt)
+		})
+		if len(latest) > 8 {
+			latest = latest[:8]
+		}
+		v.Latest = presentBillRows(latest, sc.SelfID, sc.Household.Currency)
+	}
 	s.render(w, http.StatusOK, "app", v)
 }
 
@@ -307,9 +323,12 @@ func (s *Server) postExemptions(w http.ResponseWriter, r *http.Request) {
 }
 
 func exemptIDs(r *http.Request, people []Person) []string {
+	if r.FormValue("includes_sent") != "1" {
+		return nil
+	}
 	var ids []string
 	for _, p := range people {
-		if r.FormValue("exempt_"+p.ID) == "1" {
+		if r.FormValue("include_"+p.ID) != "1" {
 			ids = append(ids, p.ID)
 		}
 	}
@@ -372,6 +391,21 @@ func (s *Server) renderMembers(w http.ResponseWriter, r *http.Request, sc scope,
 	v.Content = "members"
 	v.Error = errMsg
 	v.MemberRows = toPeople(members, sc.User.ID)
+	houseBills, err := s.store.Bills(r.Context(), sc.Household.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	contributed := contributions(houseBills)
+	var total int64
+	for _, cents := range contributed {
+		if cents > 0 {
+			total += cents
+		}
+	}
+	for i := range v.MemberRows {
+		v.MemberRows[i].Contributed = contributionLabel(contributed[v.MemberRows[i].ID], total, sc.Household.Currency)
+	}
 	v.Currencies = money.Currencies()
 	v.DraftName = strings.TrimSpace(draftName)
 	v.DraftCurrency = draftCurrency
@@ -425,7 +459,8 @@ func (s *Server) renderUtilities(w http.ResponseWriter, r *http.Request, sc scop
 		}
 		rowPeople := make([]Person, len(v.People))
 		for i, p := range v.People {
-			_, p.Exempt = exempt[p.ID]
+			_, exempted := exempt[p.ID]
+			p.Included = !exempted
 			rowPeople[i] = p
 		}
 		v.UtilityRows = append(v.UtilityRows, UtilityRow{

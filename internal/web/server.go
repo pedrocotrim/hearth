@@ -136,7 +136,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /bills/split-fields", s.auth(s.splitFields))
 	mux.HandleFunc("POST /bills", s.auth(s.postBill))
 	mux.HandleFunc("GET /bills/{billID}", s.auth(s.showBill))
-	mux.HandleFunc("POST /bills/{billID}/payments", s.auth(s.postPayment))
+	mux.HandleFunc("POST /bills/{billID}/paid", s.auth(s.postSharePaid))
 	mux.HandleFunc("POST /bills/{billID}/pay-provider", s.auth(s.postProviderPaid))
 	mux.HandleFunc("POST /bills/{billID}/delete", s.auth(s.postDeleteBill))
 

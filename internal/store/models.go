@@ -84,6 +84,7 @@ type Share struct {
 	Name          string
 	AmountCents   int64
 	Weight        int
+	Paid          bool
 	PaidCents     int64
 }
 
@@ -106,4 +107,5 @@ type NewShare struct {
 	ParticipantID string
 	AmountCents   int64
 	Weight        int
+	Paid          bool
 }

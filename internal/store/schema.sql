@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS bill_shares (
     participant_id TEXT NOT NULL REFERENCES participants(id),
     amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
     weight INTEGER NOT NULL DEFAULT 0 CHECK (weight >= 0),
+    paid INTEGER NOT NULL DEFAULT 0 CHECK (paid IN (0, 1)),
     PRIMARY KEY (bill_id, participant_id)
 );
 

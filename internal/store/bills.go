@@ -161,8 +161,12 @@ func (s *Store) CreateBill(ctx context.Context, in NewBill) (string, error) {
 			return err
 		}
 		for _, sh := range in.Shares {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO bill_shares (bill_id, participant_id, amount_cents, weight) VALUES (?, ?, ?, ?)`,
-				id, sh.ParticipantID, sh.AmountCents, sh.Weight); err != nil {
+			paid := 0
+			if sh.Paid {
+				paid = 1
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO bill_shares (bill_id, participant_id, amount_cents, weight, paid) VALUES (?, ?, ?, ?, ?)`,
+				id, sh.ParticipantID, sh.AmountCents, sh.Weight, paid); err != nil {
 				return err
 			}
 		}
@@ -291,7 +295,7 @@ func (s *Store) AddPayment(ctx context.Context, householdID, billID, userID stri
 func (b Bill) Status() string {
 	states := make([]billing.ShareState, len(b.Shares))
 	for i, sh := range b.Shares {
-		states[i] = billing.ShareState{UserID: sh.ParticipantID, AmountCents: sh.AmountCents, PaidCents: sh.PaidCents}
+		states[i] = billing.ShareState{UserID: sh.ParticipantID, AmountCents: sh.AmountCents, PaidCents: settledCents(sh)}
 	}
 	return billing.DeriveStatus(b.PaidByParticipantID, states)
 }
@@ -299,9 +303,37 @@ func (b Bill) Status() string {
 func (b Bill) Debts() []billing.Debt {
 	states := make([]billing.ShareState, len(b.Shares))
 	for i, sh := range b.Shares {
-		states[i] = billing.ShareState{UserID: sh.ParticipantID, AmountCents: sh.AmountCents, PaidCents: sh.PaidCents}
+		states[i] = billing.ShareState{UserID: sh.ParticipantID, AmountCents: sh.AmountCents, PaidCents: settledCents(sh)}
 	}
 	return billing.Debts(b.PaidByParticipantID, states)
+}
+
+func settledCents(sh Share) int64 {
+	if sh.Paid {
+		return sh.AmountCents
+	}
+	return 0
+}
+
+func (s *Store) SetSharePaid(ctx context.Context, householdID, billID, participantID string, paid bool) error {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM bill_shares s
+		JOIN bills b ON b.id = s.bill_id
+		WHERE s.bill_id = ? AND s.participant_id = ? AND b.household_id = ?`, billID, participantID, householdID).Scan(&n)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	flag := 0
+	if paid {
+		flag = 1
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE bill_shares SET paid = ? WHERE bill_id = ? AND participant_id = ?`, flag, billID, participantID)
+	return err
 }
 
 func (s *Store) queryBills(ctx context.Context, q querier, clause string, args ...any) ([]Bill, error) {
@@ -368,7 +400,7 @@ func attachShares(ctx context.Context, q querier, bills []Bill) error {
 	}
 	in := placeholders(len(bills))
 	rows, err := q.QueryContext(ctx, `
-		SELECT s.bill_id, s.participant_id, p.name, s.amount_cents, s.weight
+		SELECT s.bill_id, s.participant_id, p.name, s.amount_cents, s.weight, s.paid
 		FROM bill_shares s
 		JOIN participants p ON p.id = s.participant_id
 		WHERE s.bill_id IN (`+in+`)
@@ -379,7 +411,8 @@ func attachShares(ctx context.Context, q querier, bills []Bill) error {
 	for rows.Next() {
 		var billID string
 		var sh Share
-		if err := rows.Scan(&billID, &sh.ParticipantID, &sh.Name, &sh.AmountCents, &sh.Weight); err != nil {
+		var paid int
+		if err := rows.Scan(&billID, &sh.ParticipantID, &sh.Name, &sh.AmountCents, &sh.Weight, &paid); err != nil {
 			rows.Close()
 			return err
 		}
@@ -387,6 +420,7 @@ func attachShares(ctx context.Context, q querier, bills []Bill) error {
 		if !ok {
 			continue
 		}
+		sh.Paid = paid == 1
 		bills[i].Shares = append(bills[i].Shares, sh)
 	}
 	if err := rows.Err(); err != nil {

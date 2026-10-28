@@ -137,7 +137,7 @@ main { max-width: 920px; display: grid; gap: 18px; }
 .stack { display: grid; gap: 12px; }
 label { display: grid; gap: 6px; font-size: 0.92rem; }
 label.check { display: flex; align-items: center; gap: 8px; }
-input, select, textarea {
+input:not([type="checkbox"]), select, textarea {
   width: 100%;
   background: white;
   border: 1px solid var(--line);
@@ -145,9 +145,22 @@ input, select, textarea {
   padding: 10px 12px;
   min-height: 44px;
 }
+input[type="checkbox"] {
+  width: 1em;
+  height: 1em;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--copper);
+  flex: none;
+}
 textarea { min-height: 96px; resize: vertical; }
 input.invalid, select.invalid, textarea.invalid { border-color: var(--danger); }
 .field-error { color: var(--danger); font-size: 0.88rem; margin: 0; }
+.chart { width: 100%; height: auto; display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px 16px; list-style: none; padding: 0; margin: 0; }
+.legend li { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.88rem; }
+.swatch { width: 0.8em; height: 0.8em; border-radius: 2px; flex: none; }
 .dates, .people-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .people-grid { grid-template-columns: repeat(2, 1fr); }
 .grow { flex: 1; min-width: 180px; }

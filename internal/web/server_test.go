@@ -138,11 +138,11 @@ func TestHouseholdBillFlow(t *testing.T) {
 		t.Fatalf("luis bills:\n%s", list)
 	}
 	_, billPage := luis.followPath("/bills/" + bills[0].ID)
-	luis.submit("/bills/"+bills[0].ID+"/payments", url.Values{
-		"_csrf":   {csrf(t, billPage)},
-		"user_id": {luisPart},
-		"amount":  {"50.00"},
-	}, "Payment recorded.")
+	luis.submit("/bills/"+bills[0].ID+"/paid", url.Values{
+		"_csrf":          {csrf(t, billPage)},
+		"participant_id": {luisPart},
+		"paid":           {"1"},
+	}, "marked as paid")
 
 	_, settled := ana.followPath("/")
 	if !strings.Contains(settled, "Everyone is square.") || strings.Contains(settled, "Luis owes Ana") {
@@ -188,18 +188,22 @@ func TestGuestIsExemptFromUtility(t *testing.T) {
 	if err != nil || len(members) != 2 {
 		t.Fatal(err, len(members))
 	}
-	var kid string
+	var anaPart, kid string
 	for _, m := range members {
+		if m.Name == "Ana" {
+			anaPart = m.ParticipantID
+		}
 		if m.Name == "Kid" {
 			kid = m.ParticipantID
 		}
 	}
 	_, page = ana.followPath("/utilities")
 	ana.submit("/utilities", url.Values{
-		"_csrf":         {csrf(t, page)},
-		"name":          {"Internet"},
-		"category":      {"internet"},
-		"exempt_" + kid: {"1"},
+		"_csrf":              {csrf(t, page)},
+		"name":               {"Internet"},
+		"category":           {"internet"},
+		"includes_sent":      {"1"},
+		"include_" + anaPart: {"1"},
 	}, "Utility added.")
 	utils, err := st.Utilities(ctx, homes[0].ID)
 	if err != nil || len(utils) != 1 {

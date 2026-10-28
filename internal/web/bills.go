@@ -164,7 +164,7 @@ func (s *Server) postBill(w http.ResponseWriter, r *http.Request) {
 
 	shares := make([]store.NewShare, len(portions))
 	for i, p := range portions {
-		shares[i] = store.NewShare{ParticipantID: p.UserID, AmountCents: p.AmountCents, Weight: p.Weight}
+		shares[i] = store.NewShare{ParticipantID: p.UserID, AmountCents: p.AmountCents, Weight: p.Weight, Paid: form.Paid[p.UserID]}
 	}
 	_, err = s.store.CreateBill(r.Context(), store.NewBill{
 		HouseholdID:         sc.Household.ID,
@@ -195,31 +195,28 @@ func (s *Server) showBill(w http.ResponseWriter, r *http.Request) {
 	s.renderBill(w, r, sc, r.PathValue("billID"), "", http.StatusOK)
 }
 
-func (s *Server) postPayment(w http.ResponseWriter, r *http.Request) {
+func (s *Server) postSharePaid(w http.ResponseWriter, r *http.Request) {
 	sc, ok := s.mustScope(w, r)
 	if !ok {
 		return
 	}
 	billID := r.PathValue("billID")
-	userID := r.FormValue("user_id")
-	note, noteOK := cleanNotes(r.FormValue("note"), 200)
-	amount, amountErr := money.Parse(r.FormValue("amount"))
-	if !token.ValidID(billID) || !token.ValidID(userID) || !noteOK || amountErr != nil || amount <= 0 {
-		s.renderBill(w, r, sc, billID, "Enter a payment amount.", http.StatusUnprocessableEntity)
+	participantID := r.FormValue("participant_id")
+	paid := r.FormValue("paid") == "1"
+	if !token.ValidID(billID) || !token.ValidID(participantID) {
+		http.NotFound(w, r)
 		return
 	}
-	err := s.store.AddPayment(r.Context(), sc.Household.ID, billID, userID, amount, note, sc.User.ID)
+	err := s.store.SetSharePaid(r.Context(), sc.Household.ID, billID, participantID, paid)
 	switch {
 	case err == nil:
-		s.redirect(w, r, "/bills/"+billID+"?notice=payment")
+		notice := "unpaid"
+		if paid {
+			notice = "paid"
+		}
+		s.redirect(w, r, "/bills/"+billID+"?notice="+notice)
 	case errors.Is(err, store.ErrNotFound):
 		http.NotFound(w, r)
-	case errors.Is(err, store.ErrPaymentTooLarge):
-		s.renderBill(w, r, sc, billID, "That payment is more than the remaining share.", http.StatusUnprocessableEntity)
-	case errors.Is(err, store.ErrProviderUnpaid):
-		s.renderBill(w, r, sc, billID, "Record who paid the provider before reimbursing anyone.", http.StatusUnprocessableEntity)
-	case errors.Is(err, store.ErrInvalid):
-		s.renderBill(w, r, sc, billID, "That payment can't be recorded.", http.StatusUnprocessableEntity)
 	default:
 		s.fail(w, r, err)
 	}
@@ -412,6 +409,7 @@ func readBillForm(r *http.Request, people []Person) BillForm {
 	form.IncludesSent = r.FormValue("includes_sent") == "1"
 	form.AppliedUtility = r.FormValue("applied_utility")
 	form.Include = map[string]bool{}
+	form.Paid = map[string]bool{}
 	for _, p := range people {
 		if v := r.FormValue("weight_" + p.ID); v != "" {
 			form.Weights[p.ID] = v
@@ -421,6 +419,9 @@ func readBillForm(r *http.Request, people []Person) BillForm {
 		}
 		if r.FormValue("include_"+p.ID) == "1" {
 			form.Include[p.ID] = true
+		}
+		if r.FormValue("paid_"+p.ID) == "1" {
+			form.Paid[p.ID] = true
 		}
 	}
 	return form
