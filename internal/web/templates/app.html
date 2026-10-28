@@ -7,7 +7,8 @@
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/htmx.min.js" defer></script>
-<script src="/static/ui.js" defer></script>
+<script src="/static/chart.umd.js?v=2" defer></script>
+<script src="/static/ui.js?v=2" defer></script>
 {{end}}
 
 {{define "mark"}}
@@ -244,14 +245,9 @@
       <a class="{{if eq .Chart "both"}}on{{end}}" href="/?chart=both">Both</a>
     </div>
   </div>
-  {{.ChartSVG}}
-  {{if .ChartLegend}}
-  <ul class="legend">
-    {{range .ChartLegend}}
-    <li><span class="swatch" style="background:{{.Color}}"></span>{{.Name}}</li>
-    {{end}}
-  </ul>
-  {{end}}
+  <div class="spending-chart-wrap">
+    <canvas class="spending-chart" data-chart="{{.ChartJSON}}" aria-label="Spending by month"></canvas>
+  </div>
   <p class="fine">Each bill is counted in the month it starts. Household is the bill total. Each person is their share.</p>
 </section>
 {{if .Latest}}

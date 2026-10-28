@@ -1,8 +1,8 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
-	"html"
 	"sort"
 	"strings"
 	"time"
@@ -292,11 +292,6 @@ func contributionLabel(cents, total int64, currency string) string {
 	return fmt.Sprintf("%s · %d%%", amount, pct)
 }
 
-type ChartSwatch struct {
-	Name  string
-	Color string
-}
-
 func normalizeChart(mode string) string {
 	switch mode {
 	case "household", "people":
@@ -308,13 +303,13 @@ func normalizeChart(mode string) string {
 
 var personColors = []string{"#241c16", "#6d5e51", "#9a451c", "#1d6b45", "#8d2e2e", "#3f5d4a", "#7a5b3a"}
 
-func spendingChart(bills []store.Bill, mode string) (string, []ChartSwatch) {
+func spendingChart(bills []store.Bill, mode, currency string) string {
 	type bucket struct {
 		total  int64
 		people map[string]int64
 	}
 	if len(bills) == 0 {
-		return "", nil
+		return ""
 	}
 	names := map[string]string{}
 	var start, end time.Time
@@ -344,101 +339,64 @@ func spendingChart(bills []store.Bill, mode string) (string, []ChartSwatch) {
 		people = append(people, chartPerson{id: id, name: name})
 	}
 	sort.Slice(people, func(i, j int) bool { return people[i].name < people[j].name })
-	swatches := make([]ChartSwatch, 0, len(people)+1)
-	if mode != "people" {
-		swatches = append(swatches, ChartSwatch{Name: "Household", Color: "#c4622d"})
-	}
 	for i := range people {
 		people[i].color = personColors[i%len(personColors)]
-		if mode != "household" {
-			swatches = append(swatches, ChartSwatch{Name: people[i].name, Color: people[i].color})
-		}
 	}
 	var months []time.Time
 	for m := start; !m.After(end); m = m.AddDate(0, 1, 0) {
 		months = append(months, m)
 	}
-	var max int64
-	for _, m := range months {
-		slot := byMonth[m.Format("2006-01")]
-		if slot == nil {
-			continue
-		}
-		if slot.total > max {
-			max = slot.total
-		}
-	}
-	if max <= 0 {
-		max = 1
-	}
-	const (
-		width  = 720
-		height = 240
-		left   = 8
-		right  = 8
-		top    = 12
-		bottom = 32
-	)
-	plotW := float64(width - left - right)
-	plotH := float64(height - top - bottom)
-	baseY := float64(top) + plotH
-	slotW := plotW / float64(len(months))
-	var svg strings.Builder
-	fmt.Fprintf(&svg, `<svg class="chart" viewBox="0 0 %d %d" role="img" aria-label="Spending by month">`, width, height)
-	fmt.Fprintf(&svg, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="#ddcfc0"/>`, left, baseY, width-right, baseY)
+	labels := make([]string, len(months))
 	for i, m := range months {
-		key := m.Format("2006-01")
-		slot := byMonth[key]
-		if slot == nil {
-			slot = &bucket{people: map[string]int64{}}
-		}
-		x0 := float64(left) + float64(i)*slotW
-		switch mode {
-		case "household":
-			drawBar(&svg, x0+slotW*0.18, slotW*0.64, baseY, plotH, slot.total, max, "#c4622d", 1)
-		case "people":
-			drawPeople(&svg, x0, slotW, baseY, plotH, max, slot.people, people)
-		default:
-			drawBar(&svg, x0+slotW*0.12, slotW*0.76, baseY, plotH, slot.total, max, "#c4622d", 0.35)
-			drawPeople(&svg, x0+slotW*0.18, slotW*0.64, baseY, plotH, max, slot.people, people)
-		}
-		label := m.Format("Jan")
-		if m.Month() == time.January || i == 0 {
-			label = m.Format("Jan 06")
-		}
-		fmt.Fprintf(&svg, `<text x="%.1f" y="%d" text-anchor="middle" fill="#6d5e51" font-size="11">%s</text>`, x0+slotW/2, height-10, html.EscapeString(label))
+		labels[i] = m.Format("Jan 2006")
 	}
-	svg.WriteString(`</svg>`)
-	return svg.String(), swatches
+	payload := chartPayload{Symbol: currencySymbol(currency), Labels: labels}
+	if mode != "people" {
+		cents := make([]int64, len(months))
+		for i, m := range months {
+			if slot := byMonth[m.Format("2006-01")]; slot != nil {
+				cents[i] = slot.total
+			}
+		}
+		payload.Datasets = append(payload.Datasets, chartDataset{Label: "Household", Color: "#c4622d", Cents: cents, Order: 1})
+	}
+	if mode != "household" {
+		for _, p := range people {
+			cents := make([]int64, len(months))
+			for i, m := range months {
+				if slot := byMonth[m.Format("2006-01")]; slot != nil {
+					cents[i] = slot.people[p.id]
+				}
+			}
+			payload.Datasets = append(payload.Datasets, chartDataset{Label: p.name, Color: p.color, Cents: cents, Order: 0})
+		}
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 type chartPerson struct {
 	id, name, color string
 }
 
-func drawPeople(svg *strings.Builder, x0, slotW, baseY, plotH float64, max int64, values map[string]int64, people []chartPerson) {
-	if len(people) == 0 {
-		return
-	}
-	gap := slotW * 0.08 / float64(len(people))
-	barW := (slotW*0.84)/float64(len(people)) - gap
-	if barW < 2 {
-		barW = 2
-	}
-	for i, p := range people {
-		drawBar(svg, x0+slotW*0.08+float64(i)*(barW+gap), barW, baseY, plotH, values[p.id], max, p.color, 1)
-	}
+type chartDataset struct {
+	Label string  `json:"label"`
+	Color string  `json:"color"`
+	Cents []int64 `json:"cents"`
+	Order int     `json:"order"`
 }
 
-func drawBar(svg *strings.Builder, x, w, baseY, plotH float64, value, max int64, color string, opacity float64) {
-	if value <= 0 || w <= 0 {
-		return
-	}
-	h := plotH * float64(value) / float64(max)
-	if h < 1 {
-		h = 1
-	}
-	fmt.Fprintf(svg, `<rect x="%.2f" y="%.2f" width="%.2f" height="%.2f" rx="3" fill="%s" fill-opacity="%.2f"/>`, x, baseY-h, w, h, color, opacity)
+type chartPayload struct {
+	Symbol   string         `json:"symbol"`
+	Labels   []string       `json:"labels"`
+	Datasets []chartDataset `json:"datasets"`
+}
+
+func currencySymbol(code string) string {
+	return strings.TrimSuffix(money.Format(0, code), "0.00")
 }
 
 func formatPeriod(start, end time.Time) string {

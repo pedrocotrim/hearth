@@ -2,7 +2,6 @@ package web
 
 import (
 	"errors"
-	"html/template"
 	"net/http"
 	"sort"
 	"strings"
@@ -51,9 +50,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	v.SettledUp = len(bills) > 0 && len(attention) == 0
 	if len(bills) > 0 {
 		v.Chart = normalizeChart(r.URL.Query().Get("chart"))
-		svg, legend := spendingChart(bills, v.Chart)
-		v.ChartSVG = template.HTML(svg)
-		v.ChartLegend = legend
+		v.ChartJSON = spendingChart(bills, v.Chart, sc.Household.Currency)
 		latest := append([]store.Bill(nil), bills...)
 		sort.Slice(latest, func(i, j int) bool {
 			return latest[i].CreatedAt.After(latest[j].CreatedAt)

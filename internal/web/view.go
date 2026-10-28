@@ -39,8 +39,7 @@ type View struct {
 	HasUtilities   bool
 	SettledUp      bool
 	Chart          string
-	ChartSVG       template.HTML
-	ChartLegend    []ChartSwatch
+	ChartJSON      string
 	Latest         []BillRow
 
 	Filter   string
