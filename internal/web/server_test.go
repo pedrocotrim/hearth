@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"hearth/internal/config"
 	"hearth/internal/store"
@@ -351,6 +352,102 @@ func TestPayerCopyAndOwnerEdit(t *testing.T) {
 	_, updated := ana.followPath("/bills/" + bills[0].ID)
 	if strings.Contains(updated, "Settled") {
 		t.Fatalf("changed share stayed paid\n%s", updated)
+	}
+}
+
+func TestProviderPaymentAndMonthlyRepeatHTTP(t *testing.T) {
+	ts, st := newServer(t)
+	ana := newBrowser(t, ts.URL)
+	ana.register("Ana", "ana@example.com")
+	_, page := ana.followPath("/")
+	ana.submit("/households", url.Values{
+		"_csrf":    {csrf(t, page)},
+		"name":     {"Home"},
+		"currency": {"USD"},
+	}, "Household created.")
+
+	ctx := context.Background()
+	owner, err := st.UserByEmail(ctx, "ana@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	homes, err := st.ListHouseholds(ctx, owner.ID)
+	if err != nil || len(homes) != 1 {
+		t.Fatal(err, len(homes))
+	}
+	members, err := st.Members(ctx, homes[0].ID)
+	if err != nil || len(members) != 1 {
+		t.Fatal(err, len(members))
+	}
+	payer, err := st.AddParticipant(ctx, homes[0].ID, "Payer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	util, err := st.CreateUtility(ctx, homes[0].ID, "Electricity", "", "electric")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	start := time.Date(now.Year(), now.Month()-2, 1, 0, 0, 0, 0, time.Local)
+	end := start.AddDate(0, 1, -1)
+	billID, err := st.CreateBill(ctx, store.NewBill{
+		HouseholdID: homes[0].ID,
+		UtilityID:   util.ID,
+		PeriodStart: start,
+		PeriodEnd:   end,
+		DueDate:     end.AddDate(0, 0, 10),
+		AmountCents: 10000,
+		SplitMethod: "equal",
+		CreatedBy:   owner.ID,
+		Shares: []store.NewShare{
+			{ParticipantID: members[0].ParticipantID, AmountCents: 10000},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, billPage := ana.followPath("/bills/" + billID)
+	ana.submit("/bills/"+billID+"/pay-provider", url.Values{
+		"_csrf":    {csrf(t, billPage)},
+		"payer_id": {payer},
+	}, "Recorded who paid the provider.")
+	bill, err := st.Bill(ctx, homes[0].ID, billID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	debts := bill.Debts()
+	if len(debts) != 1 || debts[0].FromID != members[0].ParticipantID || debts[0].ToID != payer || debts[0].Cents != 10000 {
+		t.Fatalf("debts %+v", debts)
+	}
+
+	_, utilitiesPage := ana.followPath("/utilities")
+	ana.submit("/utilities/"+util.ID+"/repeat", url.Values{
+		"_csrf":   {csrf(t, utilitiesPage)},
+		"repeats": {"1"},
+	}, "Monthly repeat updated.")
+	ana.followPath("/")
+	bills, err := st.Bills(ctx, homes[0].ID)
+	if err != nil || len(bills) < 3 {
+		t.Fatal(err, len(bills))
+	}
+	billCount := len(bills)
+	var repeated *store.Bill
+	for i := range bills {
+		if bills[i].PeriodStart.Equal(start.AddDate(0, 2, 0)) {
+			repeated = &bills[i]
+		}
+	}
+	if repeated == nil {
+		t.Fatalf("repeated bill %+v", repeated)
+	}
+	if repeated.PaidByParticipantID != "" || repeated.AmountCents != 10000 || len(repeated.Shares) != 1 || repeated.Shares[0].Paid {
+		t.Fatalf("repeat fields %+v", repeated)
+	}
+	ana.followPath("/")
+	bills, err = st.Bills(ctx, homes[0].ID)
+	if err != nil || len(bills) != billCount {
+		t.Fatal(err, len(bills))
 	}
 }
 
