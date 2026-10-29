@@ -83,9 +83,15 @@ type Choice struct {
 }
 
 type BalanceLine struct {
+	Text     string
+	Amount   string
+	Yours    bool
+	Itemized []ItemizedDebtLine
+}
+
+type ItemizedDebtLine struct {
 	Text   string
 	Amount string
-	Yours  bool
 }
 
 type BillRow struct {

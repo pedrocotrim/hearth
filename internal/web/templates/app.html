@@ -220,7 +220,14 @@
   {{if .BalanceLines}}
   <ul class="balances">
     {{range .BalanceLines}}
-    <li class="{{if .Yours}}yours{{end}}"><span>{{.Text}}</span><strong>{{.Amount}}</strong></li>
+    <li class="{{if .Yours}}yours{{end}}">
+      <div class="balance-total"><span>{{.Text}}</span><strong>{{.Amount}}</strong></div>
+      {{if .Itemized}}
+      <ul class="balance-items">
+        {{range .Itemized}}<li><span>{{.Text}}</span><strong>{{.Amount}}</strong></li>{{end}}
+      </ul>
+      {{end}}
+    </li>
     {{end}}
   </ul>
   <p class="fine">Balances are netted across bills between each pair. The person who paid the provider is the one owed.</p>
@@ -397,10 +404,10 @@
 <header class="page-head">
   <div>
     {{if .Form.Editing}}
-    <h1>Edit bill</h1>
+    <div class="bill-title"><a class="back-link" href="/bills" aria-label="Back to all bills" title="Back to all bills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg></a><h1>Edit bill</h1></div>
     <p class="lede">Saving keeps a paid mark when that person's share stays the same.</p>
     {{else}}
-    <h1>Record a bill</h1>
+    <div class="bill-title"><a class="back-link" href="/bills" aria-label="Back to all bills" title="Back to all bills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg></a><h1>Record a bill</h1></div>
     <p class="lede">Everyone starts included. Uncheck someone to leave them off this bill. The split is saved with the bill.</p>
     {{end}}
   </div>
@@ -465,7 +472,7 @@
 <header class="page-head">
   <div>
     <p class="eyebrow">{{.Bill.Category}}{{if .Bill.Provider}} · {{.Bill.Provider}}{{end}}</p>
-    <h1>{{.Bill.Utility}}</h1>
+    <div class="bill-title"><a class="back-link" href="/bills" aria-label="Back to all bills" title="Back to all bills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg></a><h1>{{.Bill.Utility}}</h1></div>
     <p class="lede">{{.Bill.Period}} · due {{.Bill.Due}}</p>
   </div>
   <div class="cluster">

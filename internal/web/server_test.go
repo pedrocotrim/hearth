@@ -114,6 +114,11 @@ func TestHouseholdBillFlow(t *testing.T) {
 	}
 
 	status, body, _ = ana.get("/bills/new")
+	if !strings.Contains(body, `class="back-link" href="/bills"`) ||
+		!strings.Contains(body, `<svg viewBox="0 0 24 24" aria-hidden="true">`) ||
+		strings.Index(body, `class="back-link" href="/bills"`) > strings.Index(body, "<h1>Record a bill</h1>") {
+		t.Fatalf("new bill form has no back arrow:\n%s", body)
+	}
 	ana.submit("/bills", url.Values{
 		"_csrf":        {csrf(t, body)},
 		"utility_id":   {utils[0].ID},
@@ -126,8 +131,18 @@ func TestHouseholdBillFlow(t *testing.T) {
 	}, "Bill recorded.")
 
 	_, home = ana.followPath("/")
-	if !strings.Contains(home, "Luis owes Ana") || !strings.Contains(home, "$50.00") {
+	if !strings.Contains(home, "Luis owes Ana") || !strings.Contains(home, "$50.00") ||
+		!strings.Contains(home, "Electricity (Oct 1–31, 2026)") {
 		t.Fatalf("ledger:\n%s", home)
+	}
+	parentAt := strings.Index(home, `<li class="yours">`)
+	itemListAt := strings.Index(home, `<ul class="balance-items">`)
+	debtAt := strings.Index(home, "Electricity (Oct 1–31, 2026)")
+	if parentAt < 0 || itemListAt < parentAt || debtAt < itemListAt {
+		t.Fatalf("bill item is not nested inside the existing who-owes-whom list item:\n%s", home)
+	}
+	if strings.Contains(home, "Outstanding by bill") {
+		t.Fatalf("ledger has an extra itemized section:\n%s", home)
 	}
 
 	bills, err := st.Bills(ctx, homes[0].ID)
@@ -138,7 +153,15 @@ func TestHouseholdBillFlow(t *testing.T) {
 	if !strings.Contains(list, "You owe $50.00") {
 		t.Fatalf("luis bills:\n%s", list)
 	}
+	if strings.Contains(list, `class="back-link"`) {
+		t.Fatalf("bills list unexpectedly has a back link:\n%s", list)
+	}
 	_, billPage := luis.followPath("/bills/" + bills[0].ID)
+	if !strings.Contains(billPage, `class="back-link" href="/bills"`) ||
+		!strings.Contains(billPage, `<svg viewBox="0 0 24 24" aria-hidden="true">`) ||
+		strings.Index(billPage, `class="back-link" href="/bills"`) > strings.Index(billPage, "<h1>Electricity</h1>") {
+		t.Fatalf("bill detail has no back arrow:\n%s", billPage)
+	}
 	luis.submit("/bills/"+bills[0].ID+"/paid", url.Values{
 		"_csrf":          {csrf(t, billPage)},
 		"participant_id": {luisPart},
@@ -146,7 +169,7 @@ func TestHouseholdBillFlow(t *testing.T) {
 	}, "marked as paid")
 
 	_, settled := ana.followPath("/")
-	if !strings.Contains(settled, "Everyone is square.") || strings.Contains(settled, "Luis owes Ana") {
+	if !strings.Contains(settled, "Everyone is square.") || strings.Contains(settled, "Luis owes Ana") || strings.Contains(settled, "Electricity (Oct 1–31, 2026) · Luis owes Ana") {
 		t.Fatalf("settled ledger:\n%s", settled)
 	}
 	_, finalBill := ana.followPath("/bills/" + bills[0].ID)
@@ -333,7 +356,9 @@ func TestPayerCopyAndOwnerEdit(t *testing.T) {
 	}
 
 	_, editPage := ana.followPath("/bills/" + bills[0].ID + "/edit")
-	if !strings.Contains(editPage, "Edit bill") {
+	if !strings.Contains(editPage, "Edit bill") || !strings.Contains(editPage, `class="back-link" href="/bills"`) ||
+		!strings.Contains(editPage, `<svg viewBox="0 0 24 24" aria-hidden="true">`) ||
+		strings.Index(editPage, `class="back-link" href="/bills"`) > strings.Index(editPage, "<h1>Edit bill</h1>") {
 		t.Fatalf("edit page:\n%s", editPage)
 	}
 	ana.submit("/bills/"+bills[0].ID, url.Values{

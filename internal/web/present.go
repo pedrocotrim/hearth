@@ -209,6 +209,7 @@ func buildBalances(selfID, currency string, bills []store.Bill) ([]BalanceLine, 
 		}
 		debts = append(debts, b.Debts()...)
 	}
+	itemized := buildItemizedDebts(currency, bills)
 	net := billing.Net(debts)
 	sort.Slice(net, func(i, j int) bool {
 		if net[i].Cents != net[j].Cents {
@@ -237,12 +238,118 @@ func buildBalances(selfID, currency string, bills []store.Bill) ([]BalanceLine, 
 			to = "Someone"
 		}
 		lines = append(lines, BalanceLine{
-			Text:   from + " owes " + to,
-			Amount: money.Format(d.Cents, currency),
-			Yours:  d.FromID == selfID || d.ToID == selfID,
+			Text:     from + " owes " + to,
+			Amount:   money.Format(d.Cents, currency),
+			Yours:    d.FromID == selfID || d.ToID == selfID,
+			Itemized: itemized[debtPair{fromID: d.FromID, toID: d.ToID}],
 		})
 	}
 	return lines, youOwe, owedToYou
+}
+
+type itemizedDebtEntry struct {
+	fromID string
+	toID   string
+	line   ItemizedDebtLine
+	cents  int64
+}
+
+type debtPair struct {
+	fromID string
+	toID   string
+}
+
+func buildItemizedDebts(currency string, bills []store.Bill) map[debtPair][]ItemizedDebtLine {
+	var items []itemizedDebtEntry
+	for _, b := range bills {
+		for _, debt := range b.Debts() {
+			items = append(items, itemizedDebtEntry{
+				fromID: debt.FromID,
+				toID:   debt.ToID,
+				cents:  debt.Cents,
+				line: ItemizedDebtLine{
+					Text:   b.UtilityName + " (" + formatPeriod(b.PeriodStart, b.PeriodEnd) + ")",
+					Amount: money.Format(debt.Cents, currency),
+				},
+			})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		aLow, aHigh := participantPair(items[i])
+		bLow, bHigh := participantPair(items[j])
+		if aLow != bLow {
+			return aLow < bLow
+		}
+		if aHigh != bHigh {
+			return aHigh < bHigh
+		}
+		if items[i].fromID != items[j].fromID {
+			return items[i].fromID < items[j].fromID
+		}
+		return items[i].line.Text < items[j].line.Text
+	})
+	// Cancel reverse debts between each pair so the itemized rows match the net totals.
+	for start := 0; start < len(items); {
+		end := start + 1
+		for end < len(items) && sameParticipantPair(items[start], items[end]) {
+			end++
+		}
+		forward, reverse := make([]int, 0), make([]int, 0)
+		var forwardTotal, reverseTotal int64
+		for i := start; i < end; i++ {
+			if items[i].fromID < items[i].toID {
+				forward = append(forward, i)
+				forwardTotal += items[i].cents
+			} else {
+				reverse = append(reverse, i)
+				reverseTotal += items[i].cents
+			}
+		}
+		cancel := forwardTotal
+		if reverseTotal < cancel {
+			cancel = reverseTotal
+		}
+		reduceDebtItems(items, forward, cancel)
+		reduceDebtItems(items, reverse, cancel)
+		start = end
+	}
+	out := make(map[debtPair][]ItemizedDebtLine)
+	for _, item := range items {
+		if item.cents == 0 {
+			continue
+		}
+		item.line.Amount = money.Format(item.cents, currency)
+		key := debtPair{fromID: item.fromID, toID: item.toID}
+		out[key] = append(out[key], item.line)
+	}
+	return out
+}
+
+func sameParticipantPair(a, b itemizedDebtEntry) bool {
+	aLow, aHigh := participantPair(a)
+	bLow, bHigh := participantPair(b)
+	return aLow == bLow && aHigh == bHigh
+}
+
+func participantPair(debt itemizedDebtEntry) (string, string) {
+	if debt.fromID < debt.toID {
+		return debt.fromID, debt.toID
+	}
+	return debt.toID, debt.fromID
+}
+
+func reduceDebtItems(items []itemizedDebtEntry, indices []int, amount int64) {
+	for _, i := range indices {
+		reduction := items[i].cents
+		if reduction > amount {
+			reduction = amount
+		}
+		items[i].cents -= reduction
+		amount -= reduction
+		if amount == 0 {
+			return
+		}
+	}
 }
 
 func yourShare(b store.Bill, selfID, currency string) string {
