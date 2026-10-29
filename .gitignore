@@ -6,3 +6,7 @@
 *.exe
 hearth
 .env
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/android/app/libs/*.aar
+mobile/ios/Mobile.xcframework/
