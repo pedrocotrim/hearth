@@ -319,6 +319,27 @@ func (s *Server) postExemptions(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, "/utilities?notice=exemptions")
 }
 
+func (s *Server) postRepeat(w http.ResponseWriter, r *http.Request) {
+	sc, ok := s.mustScope(w, r)
+	if !ok {
+		return
+	}
+	utilityID := r.PathValue("utilityID")
+	if !token.ValidID(utilityID) {
+		http.NotFound(w, r)
+		return
+	}
+	err := s.store.SetRepeats(r.Context(), sc.Household.ID, utilityID, r.FormValue("repeats") == "1")
+	switch {
+	case err == nil:
+		s.redirect(w, r, "/utilities?notice=repeat")
+	case errors.Is(err, store.ErrNotFound):
+		http.NotFound(w, r)
+	default:
+		s.fail(w, r, err)
+	}
+}
+
 func exemptIDs(r *http.Request, people []Person) []string {
 	if r.FormValue("includes_sent") != "1" {
 		return nil
@@ -333,6 +354,10 @@ func exemptIDs(r *http.Request, people []Person) []string {
 }
 
 func (s *Server) householdLists(w http.ResponseWriter, r *http.Request, householdID string) ([]store.Bill, []store.Member, []store.Utility, bool) {
+	if err := s.store.EnsureRecurring(r.Context(), householdID, time.Now()); err != nil {
+		s.fail(w, r, err)
+		return nil, nil, nil, false
+	}
 	bills, err := s.store.Bills(r.Context(), householdID)
 	if err != nil {
 		s.fail(w, r, err)
@@ -388,6 +413,10 @@ func (s *Server) renderMembers(w http.ResponseWriter, r *http.Request, sc scope,
 	v.Content = "members"
 	v.Error = errMsg
 	v.MemberRows = toPeople(members, sc.User.ID)
+	if err := s.store.EnsureRecurring(r.Context(), sc.Household.ID, time.Now()); err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	houseBills, err := s.store.Bills(r.Context(), sc.Household.ID)
 	if err != nil {
 		s.fail(w, r, err)
@@ -465,6 +494,7 @@ func (s *Server) renderUtilities(w http.ResponseWriter, r *http.Request, sc scop
 			Name:     u.Name,
 			Provider: provider,
 			Category: categoryLabel(u.Category),
+			Repeats:  u.Repeats,
 			People:   rowPeople,
 		})
 	}

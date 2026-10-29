@@ -34,7 +34,7 @@ func (s *Store) CreateUtility(ctx context.Context, householdID, name, provider, 
 }
 
 func (s *Store) Utilities(ctx context.Context, householdID string) ([]Utility, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, household_id, name, provider, category, created_at FROM utilities WHERE household_id = ? ORDER BY name COLLATE NOCASE`, householdID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, household_id, name, provider, category, repeats, created_at FROM utilities WHERE household_id = ? ORDER BY name COLLATE NOCASE`, householdID)
 	if err != nil {
 		return nil, err
 	}
@@ -43,9 +43,11 @@ func (s *Store) Utilities(ctx context.Context, householdID string) ([]Utility, e
 	for rows.Next() {
 		var u Utility
 		var created string
-		if err := rows.Scan(&u.ID, &u.HouseholdID, &u.Name, &u.Provider, &u.Category, &created); err != nil {
+		var repeats int
+		if err := rows.Scan(&u.ID, &u.HouseholdID, &u.Name, &u.Provider, &u.Category, &repeats, &created); err != nil {
 			return nil, err
 		}
+		u.Repeats = repeats == 1
 		u.CreatedAt, err = parseTS(created)
 		if err != nil {
 			return nil, err
@@ -106,23 +108,8 @@ func (s *Store) ExemptionSet(ctx context.Context, householdID, utilityID string)
 }
 
 func (s *Store) CreateBill(ctx context.Context, in NewBill) (string, error) {
-	if in.AmountCents <= 0 {
-		return "", ErrInvalid
-	}
-	var sum int64
-	seen := map[string]bool{}
-	for _, sh := range in.Shares {
-		if sh.ParticipantID == "" || seen[sh.ParticipantID] || sh.AmountCents < 0 {
-			return "", ErrInvalid
-		}
-		seen[sh.ParticipantID] = true
-		sum += sh.AmountCents
-	}
-	if sum != in.AmountCents {
-		return "", ErrInvalid
-	}
-	if in.PaidByParticipantID != "" && !seen[in.PaidByParticipantID] {
-		return "", ErrInvalid
+	if err := validateShares(in); err != nil {
+		return "", err
 	}
 	id, err := newID()
 	if err != nil {
@@ -139,11 +126,20 @@ func (s *Store) CreateBill(ctx context.Context, in NewBill) (string, error) {
 			return err
 		}
 		for _, sh := range in.Shares {
-			var n int
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM participants WHERE household_id = ? AND id = ? AND active = 1`, in.HouseholdID, sh.ParticipantID).Scan(&n); err != nil {
+			ok, err := activeParticipant(ctx, tx, in.HouseholdID, sh.ParticipantID)
+			if err != nil {
 				return err
 			}
-			if n != 1 {
+			if !ok {
+				return ErrInvalid
+			}
+		}
+		if in.PaidByParticipantID != "" {
+			ok, err := activeParticipant(ctx, tx, in.HouseholdID, in.PaidByParticipantID)
+			if err != nil {
+				return err
+			}
+			if !ok {
 				return ErrInvalid
 			}
 		}
@@ -176,6 +172,129 @@ func (s *Store) CreateBill(ctx context.Context, in NewBill) (string, error) {
 		return "", err
 	}
 	return id, nil
+}
+
+func (s *Store) UpdateBill(ctx context.Context, householdID, billID string, in NewBill) error {
+	if err := validateShares(in); err != nil {
+		return err
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		bills, err := s.queryBills(ctx, tx, `WHERE b.household_id = ? AND b.id = ?`, householdID, billID)
+		if err != nil {
+			return err
+		}
+		if len(bills) == 0 {
+			return ErrNotFound
+		}
+		bill := bills[0]
+		var owner string
+		err = tx.QueryRowContext(ctx, `SELECT household_id FROM utilities WHERE id = ?`, in.UtilityID).Scan(&owner)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && owner != householdID) {
+			return ErrInvalid
+		}
+		if err != nil {
+			return err
+		}
+		for _, sh := range in.Shares {
+			ok, err := activeParticipant(ctx, tx, householdID, sh.ParticipantID)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return ErrInvalid
+			}
+		}
+		if in.PaidByParticipantID != "" {
+			ok, err := activeParticipant(ctx, tx, householdID, in.PaidByParticipantID)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return ErrInvalid
+			}
+		}
+		var payer any
+		if in.PaidByParticipantID != "" {
+			payer = in.PaidByParticipantID
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE bills SET
+			utility_id = ?, period_start = ?, period_end = ?, due_date = ?, amount_cents = ?,
+			paid_by_participant_id = ?, invoice_ref = ?, notes = ?, split_method = ?
+			WHERE id = ? AND household_id = ?`,
+			in.UtilityID, fmtDate(in.PeriodStart), fmtDate(in.PeriodEnd), fmtDate(in.DueDate), in.AmountCents,
+			payer, in.InvoiceRef, in.Notes, in.SplitMethod, billID, householdID)
+		if err != nil {
+			return err
+		}
+		next := map[string]NewShare{}
+		for _, sh := range in.Shares {
+			next[sh.ParticipantID] = sh
+		}
+		prev := map[string]Share{}
+		for _, sh := range bill.Shares {
+			prev[sh.ParticipantID] = sh
+		}
+		for id, sh := range prev {
+			replacement, ok := next[id]
+			if ok && replacement.AmountCents == sh.AmountCents {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM share_payments WHERE bill_id = ? AND participant_id = ?`, billID, id); err != nil {
+				return err
+			}
+			if !ok {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM bill_shares WHERE bill_id = ? AND participant_id = ?`, billID, id); err != nil {
+					return err
+				}
+			}
+		}
+		for _, sh := range in.Shares {
+			old, exists := prev[sh.ParticipantID]
+			paid := 0
+			if exists && old.AmountCents == sh.AmountCents && old.Paid {
+				paid = 1
+			}
+			if exists {
+				_, err = tx.ExecContext(ctx, `UPDATE bill_shares SET amount_cents = ?, weight = ?, paid = ? WHERE bill_id = ? AND participant_id = ?`,
+					sh.AmountCents, sh.Weight, paid, billID, sh.ParticipantID)
+			} else {
+				_, err = tx.ExecContext(ctx, `INSERT INTO bill_shares (bill_id, participant_id, amount_cents, weight, paid) VALUES (?, ?, ?, ?, ?)`,
+					billID, sh.ParticipantID, sh.AmountCents, sh.Weight, paid)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func validateShares(in NewBill) error {
+	if in.AmountCents <= 0 {
+		return ErrInvalid
+	}
+	var sum int64
+	seen := map[string]bool{}
+	for _, sh := range in.Shares {
+		if sh.ParticipantID == "" || seen[sh.ParticipantID] || sh.AmountCents < 0 {
+			return ErrInvalid
+		}
+		seen[sh.ParticipantID] = true
+		sum += sh.AmountCents
+	}
+	if sum != in.AmountCents {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func activeParticipant(ctx context.Context, q querier, householdID, participantID string) (bool, error) {
+	var n int
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM participants WHERE household_id = ? AND id = ? AND active = 1`, householdID, participantID).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 func (s *Store) Bills(ctx context.Context, householdID string) ([]Bill, error) {
@@ -225,14 +344,11 @@ func (s *Store) MarkProviderPaid(ctx context.Context, householdID, billID, payer
 		if bill.PaidByParticipantID != "" {
 			return ErrInvalid
 		}
-		found := false
-		for _, sh := range bill.Shares {
-			if sh.ParticipantID == payerID {
-				found = true
-				break
-			}
+		ok, err := activeParticipant(ctx, tx, householdID, payerID)
+		if err != nil {
+			return err
 		}
-		if !found {
+		if !ok {
 			return ErrInvalid
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE bills SET paid_by_participant_id = ? WHERE id = ? AND household_id = ? AND paid_by_participant_id IS NULL`, payerID, billID, householdID)

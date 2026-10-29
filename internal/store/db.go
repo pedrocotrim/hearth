@@ -78,7 +78,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	)`); err != nil {
 		return err
 	}
-	var v1, v2, v3 int
+	var v1, v2, v3, v4 int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 1`).Scan(&v1); err != nil {
 		return err
 	}
@@ -88,25 +88,41 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 3`).Scan(&v3); err != nil {
 		return err
 	}
-	if v3 > 0 {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 4`).Scan(&v4); err != nil {
+		return err
+	}
+	if v4 > 0 {
 		return nil
 	}
-	if v1 == 0 && v2 == 0 {
+	if v1 == 0 && v2 == 0 && v3 == 0 {
 		if err := execScript(ctx, s.db, schemaSQL); err != nil {
 			return err
 		}
 	} else {
-		if v2 == 0 {
+		if v1 > 0 && v2 == 0 {
 			if err := s.migrateV2(ctx); err != nil {
 				return err
 			}
 		}
-		if err := s.migrateV3(ctx); err != nil {
+		if v3 == 0 {
+			if err := s.migrateV3(ctx); err != nil {
+				return err
+			}
+		}
+		if err := s.migrateV4(ctx); err != nil {
 			return err
 		}
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)`, time.Now().UTC().Format(time.RFC3339Nano))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?)`, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+func (s *Store) migrateV4(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `ALTER TABLE utilities ADD COLUMN repeats INTEGER NOT NULL DEFAULT 0 CHECK (repeats IN (0, 1))`)
+	if err != nil {
+		return fmt.Errorf("migrate v4: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) migrateV3(ctx context.Context) error {

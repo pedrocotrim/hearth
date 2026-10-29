@@ -346,6 +346,7 @@
       {{end}}
     </div>
   </fieldset>
+  {{if not .Form.Editing}}
   <div class="people-grid">
     {{range .People}}{{if .Included}}
     <label class="check">
@@ -355,6 +356,7 @@
     </label>
     {{end}}{{end}}
   </div>
+  {{end}}
   {{if eq .Form.SplitMethod "weights"}}
   <div class="people-grid">
     {{range .People}}{{if .Included}}
@@ -394,13 +396,19 @@
 {{define "bill-new"}}
 <header class="page-head">
   <div>
+    {{if .Form.Editing}}
+    <h1>Edit bill</h1>
+    <p class="lede">Saving keeps a paid mark when that person's share stays the same.</p>
+    {{else}}
     <h1>Record a bill</h1>
     <p class="lede">Everyone starts included. Uncheck someone to leave them off this bill. The split is saved with the bill.</p>
+    {{end}}
   </div>
 </header>
 {{template "alert" .}}
-<form id="bill-form" class="stack panel" method="post" action="/bills">
+<form id="bill-form" class="stack panel" method="post" action="{{if .Form.Editing}}/bills/{{.Form.BillID}}{{else}}/bills{{end}}">
   <input type="hidden" name="_csrf" value="{{.CSRF}}">
+  {{if .Form.Editing}}<input type="hidden" name="editing" value="1">{{end}}
   <label>Utility
     <select name="utility_id" required
       hx-get="/bills/split-fields" hx-trigger="change" hx-target="#split-fields" hx-swap="outerHTML" hx-include="#bill-form" hx-push-url="false">
@@ -432,7 +440,7 @@
       {{end}}
     </select>
   </label>
-  <p class="fine">Until someone pays the company, nobody owes anyone else. After that, the others owe the person who paid.</p>
+  <p class="fine">The person who paid the provider does not have to be included in the split. Until someone pays the company, nobody owes anyone else. After that, the others owe the person who paid.</p>
   {{with index .Fields "paid_by"}}<p class="field-error">{{.}}</p>{{end}}
   <label>How to split
     <select name="split_method" hx-get="/bills/split-fields" hx-trigger="change" hx-target="#split-fields" hx-swap="outerHTML" hx-include="#bill-form" hx-push-url="false">
@@ -447,8 +455,8 @@
   <label>Note<textarea name="notes" maxlength="500">{{.Form.Notes}}</textarea></label>
   {{with index .Fields "notes"}}<p class="field-error">{{.}}</p>{{end}}
   <div class="cluster">
-    <button class="btn primary" type="submit">Record bill</button>
-    <a class="btn" href="/bills">Cancel</a>
+    <button class="btn primary" type="submit">{{if .Form.Editing}}Save changes{{else}}Record bill{{end}}</button>
+    <a class="btn" href="{{if .Form.Editing}}/bills/{{.Form.BillID}}{{else}}/bills{{end}}">Cancel</a>
   </div>
 </form>
 {{end}}
@@ -461,6 +469,8 @@
     <p class="lede">{{.Bill.Period}} · due {{.Bill.Due}}</p>
   </div>
   <div class="cluster">
+    <a class="btn" href="/bills/new?from={{.Bill.ID}}">Copy</a>
+    {{if .IsOwner}}<a class="btn" href="/bills/{{.Bill.ID}}/edit">Edit</a>{{end}}
     <span class="status {{.Bill.Status}}">{{.Bill.StatusLabel}}</span>
     <strong class="num total">{{.Bill.Amount}}</strong>
   </div>
@@ -587,6 +597,12 @@
         {{end}}
       </div>
       <button class="btn" type="submit">Save defaults</button>
+    </form>
+    <form method="post" action="/utilities/{{.ID}}/repeat" class="stack">
+      <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+      <label class="check"><input type="checkbox" name="repeats" value="1" {{if .Repeats}}checked{{end}}> Repeat every month</label>
+      <p class="fine">After a period starts, opening Hearth copies the latest bill for this utility, moves the dates forward one month, and leaves the new bill unpaid.</p>
+      <button class="btn" type="submit">Save repeat</button>
     </form>
   </section>
   {{end}}

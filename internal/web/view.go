@@ -126,6 +126,7 @@ type UtilityRow struct {
 	Name     string
 	Provider string
 	Category string
+	Repeats  bool
 	People   []Person
 }
 
@@ -136,6 +137,8 @@ type InviteRow struct {
 }
 
 type BillForm struct {
+	BillID         string
+	Editing        bool
 	UtilityID      string
 	PeriodStart    string
 	PeriodEnd      string

@@ -55,6 +55,7 @@ type Utility struct {
 	Name        string
 	Provider    string
 	Category    string
+	Repeats     bool
 	CreatedAt   time.Time
 }
 

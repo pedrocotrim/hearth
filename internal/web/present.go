@@ -70,6 +70,10 @@ func noticeText(code string) string {
 		return "Utility added."
 	case "exemptions":
 		return "Default exemptions saved."
+	case "repeat":
+		return "Monthly repeat updated."
+	case "edited":
+		return "Bill updated."
 	case "need-utility":
 		return "Add a utility before recording a bill."
 	case "renamed":

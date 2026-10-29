@@ -218,6 +218,142 @@ func TestGuestIsExemptFromUtility(t *testing.T) {
 	}
 }
 
+func TestPayerCopyAndOwnerEdit(t *testing.T) {
+	ts, st := newServer(t)
+	ana := newBrowser(t, ts.URL)
+	ana.register("Ana", "ana@example.com")
+	_, home := ana.followPath("/")
+	ana.submit("/households", url.Values{
+		"_csrf":    {csrf(t, home)},
+		"name":     {"Home"},
+		"currency": {"USD"},
+	}, "Household created.")
+
+	_, page := ana.followPath("/members")
+	ana.submit("/members/participants", url.Values{
+		"_csrf": {csrf(t, page)},
+		"name":  {"Kid"},
+	}, "without an account")
+
+	ctx := context.Background()
+	owner, err := st.UserByEmail(ctx, "ana@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	homes, err := st.ListHouseholds(ctx, owner.ID)
+	if err != nil || len(homes) != 1 {
+		t.Fatal(err, len(homes))
+	}
+	members, err := st.Members(ctx, homes[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var anaPart, kid string
+	for _, m := range members {
+		if m.Name == "Ana" {
+			anaPart = m.ParticipantID
+		}
+		if m.Name == "Kid" {
+			kid = m.ParticipantID
+		}
+	}
+	_, page = ana.followPath("/utilities")
+	ana.submit("/utilities", url.Values{
+		"_csrf":    {csrf(t, page)},
+		"name":     {"Electricity"},
+		"category": {"electric"},
+	}, "Utility added.")
+	utils, err := st.Utilities(ctx, homes[0].ID)
+	if err != nil || len(utils) != 1 {
+		t.Fatal(err, len(utils))
+	}
+	_, page = ana.followPath("/bills/new")
+	ana.submit("/bills", url.Values{
+		"_csrf":              {csrf(t, page)},
+		"utility_id":         {utils[0].ID},
+		"period_start":       {"2026-10-01"},
+		"period_end":         {"2026-10-31"},
+		"due_date":           {"2026-11-10"},
+		"amount":             {"10.00"},
+		"paid_by":            {kid},
+		"split_method":       {"equal"},
+		"includes_sent":      {"1"},
+		"include_" + anaPart: {"1"},
+	}, "Bill recorded.")
+	_, home = ana.followPath("/")
+	if !strings.Contains(home, "Ana owes Kid") || !strings.Contains(home, "$10.00") {
+		t.Fatalf("ledger:\n%s", home)
+	}
+	bills, err := st.Bills(ctx, homes[0].ID)
+	if err != nil || len(bills) != 1 {
+		t.Fatal(err, len(bills))
+	}
+	_, billPage := ana.followPath("/bills/" + bills[0].ID)
+	if !strings.Contains(billPage, "Copy") || !strings.Contains(billPage, "Edit") {
+		t.Fatalf("bill actions:\n%s", billPage)
+	}
+	ana.submit("/bills/"+bills[0].ID+"/paid", url.Values{
+		"_csrf":          {csrf(t, billPage)},
+		"participant_id": {anaPart},
+		"paid":           {"1"},
+	}, "marked as paid")
+
+	_, copyPage := ana.followPath("/bills/new?from=" + bills[0].ID)
+	for _, want := range []string{`value="2026-11-01"`, `value="2026-12-01"`, `value="2026-12-11"`} {
+		if !strings.Contains(copyPage, want) {
+			t.Fatalf("copy form missing %s\n%s", want, copyPage)
+		}
+	}
+	if strings.Contains(copyPage, `name="paid_`+anaPart+`" value="1" checked`) {
+		t.Fatalf("copy kept a paid mark\n%s", copyPage)
+	}
+
+	luis := newBrowser(t, ts.URL)
+	luis.register("Luis", "luis@example.com")
+	_, membersPage := ana.followPath("/members")
+	ana.submit("/members/invite", url.Values{
+		"_csrf": {csrf(t, membersPage)},
+		"email": {"luis@example.com"},
+	}, "Invite created")
+	invite := cookieValue(t, ana, "hearth_invite")
+	_, invitePage := luis.followPath("/invites/" + invite)
+	luis.submit("/invites/"+invite+"/accept", url.Values{"_csrf": {csrf(t, invitePage)}}, "joined the household")
+
+	status, body, _ := luis.get("/bills/" + bills[0].ID + "/edit")
+	if status != http.StatusForbidden || !strings.Contains(body, "household owner") {
+		t.Fatalf("luis edit %d\n%s", status, body)
+	}
+	_, luisBill := luis.followPath("/bills/" + bills[0].ID)
+	status, body, _ = luis.post("/bills/"+bills[0].ID, url.Values{
+		"_csrf": {csrf(t, luisBill)},
+	})
+	if status != http.StatusForbidden {
+		t.Fatalf("luis save %d\n%s", status, body)
+	}
+
+	_, editPage := ana.followPath("/bills/" + bills[0].ID + "/edit")
+	if !strings.Contains(editPage, "Edit bill") {
+		t.Fatalf("edit page:\n%s", editPage)
+	}
+	ana.submit("/bills/"+bills[0].ID, url.Values{
+		"_csrf":              {csrf(t, editPage)},
+		"utility_id":         {utils[0].ID},
+		"period_start":       {"2026-10-01"},
+		"period_end":         {"2026-10-31"},
+		"due_date":           {"2026-11-10"},
+		"amount":             {"20.00"},
+		"paid_by":            {kid},
+		"split_method":       {"equal"},
+		"includes_sent":      {"1"},
+		"include_" + anaPart: {"1"},
+		"editing":            {"1"},
+	}, "Bill updated.")
+	_, updated := ana.followPath("/bills/" + bills[0].ID)
+	if strings.Contains(updated, "Settled") {
+		t.Fatalf("changed share stayed paid\n%s", updated)
+	}
+}
+
 type browser struct {
 	t      *testing.T
 	base   string

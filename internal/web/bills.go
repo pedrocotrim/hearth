@@ -20,6 +20,10 @@ func (s *Server) bills(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if err := s.store.EnsureRecurring(r.Context(), sc.Household.ID, time.Now()); err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	bills, err := s.store.Bills(r.Context(), sc.Household.ID)
 	if err != nil {
 		s.fail(w, r, err)
@@ -47,7 +51,51 @@ func (s *Server) newBill(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.renderBillForm(w, r, sc, defaultBillForm(), nil, "", http.StatusOK)
+	from := r.URL.Query().Get("from")
+	if from == "" {
+		s.renderBillForm(w, r, sc, defaultBillForm(), nil, "", http.StatusOK)
+		return
+	}
+	if !token.ValidID(from) {
+		http.NotFound(w, r)
+		return
+	}
+	bill, err := s.store.Bill(r.Context(), sc.Household.ID, from)
+	if errors.Is(err, store.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.renderBillForm(w, r, sc, formFromBill(bill, true), nil, "", http.StatusOK)
+}
+
+func (s *Server) editBill(w http.ResponseWriter, r *http.Request) {
+	sc, ok := s.mustScope(w, r)
+	if !ok {
+		return
+	}
+	if !sc.owner() {
+		http.Error(w, "Only the household owner can edit a bill.", http.StatusForbidden)
+		return
+	}
+	billID := r.PathValue("billID")
+	if !token.ValidID(billID) {
+		http.NotFound(w, r)
+		return
+	}
+	bill, err := s.store.Bill(r.Context(), sc.Household.ID, billID)
+	if errors.Is(err, store.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.renderBillForm(w, r, sc, formFromBill(bill, false), nil, "", http.StatusOK)
 }
 
 func (s *Server) splitFields(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +129,34 @@ func (s *Server) postBill(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.saveBill(w, r, sc, "")
+}
+
+func (s *Server) postUpdateBill(w http.ResponseWriter, r *http.Request) {
+	sc, ok := s.mustScope(w, r)
+	if !ok {
+		return
+	}
+	if !sc.owner() {
+		http.Error(w, "Only the household owner can edit a bill.", http.StatusForbidden)
+		return
+	}
+	billID := r.PathValue("billID")
+	if !token.ValidID(billID) {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := s.store.Bill(r.Context(), sc.Household.ID, billID); errors.Is(err, store.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	} else if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.saveBill(w, r, sc, billID)
+}
+
+func (s *Server) saveBill(w http.ResponseWriter, r *http.Request, sc scope, billID string) {
 	members, err := s.store.Members(r.Context(), sc.Household.ID)
 	if err != nil {
 		s.fail(w, r, err)
@@ -134,14 +210,14 @@ func (s *Server) postBill(w http.ResponseWriter, r *http.Request) {
 	}
 	if form.PaidBy != "" {
 		known := false
-		for _, p := range includedPeople(form, people) {
+		for _, p := range people {
 			if p.ID == form.PaidBy {
 				known = true
 				break
 			}
 		}
 		if !known {
-			fields["paid_by"] = "Choose someone included in this bill."
+			fields["paid_by"] = "Choose someone in this household."
 		}
 	}
 
@@ -158,15 +234,19 @@ func (s *Server) postBill(w http.ResponseWriter, r *http.Request) {
 	if len(fields) > 0 {
 		form.InvoiceRef = invoice
 		form.Notes = notes
+		if billID != "" {
+			form.Editing = true
+			form.BillID = billID
+		}
 		s.renderBillForm(w, r, sc, form, fields, "Check the bill and try again.", http.StatusUnprocessableEntity)
 		return
 	}
 
 	shares := make([]store.NewShare, len(portions))
 	for i, p := range portions {
-		shares[i] = store.NewShare{ParticipantID: p.UserID, AmountCents: p.AmountCents, Weight: p.Weight, Paid: form.Paid[p.UserID]}
+		shares[i] = store.NewShare{ParticipantID: p.UserID, AmountCents: p.AmountCents, Weight: p.Weight, Paid: billID == "" && form.Paid[p.UserID]}
 	}
-	_, err = s.store.CreateBill(r.Context(), store.NewBill{
+	in := store.NewBill{
 		HouseholdID:         sc.Household.ID,
 		UtilityID:           form.UtilityID,
 		PeriodStart:         start,
@@ -179,12 +259,21 @@ func (s *Server) postBill(w http.ResponseWriter, r *http.Request) {
 		SplitMethod:         form.SplitMethod,
 		CreatedBy:           sc.User.ID,
 		Shares:              shares,
-	})
+	}
+	if billID == "" {
+		_, err = s.store.CreateBill(r.Context(), in)
+	} else {
+		err = s.store.UpdateBill(r.Context(), sc.Household.ID, billID, in)
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	s.redirect(w, r, "/bills?notice=bill")
+	if billID == "" {
+		s.redirect(w, r, "/bills?notice=bill")
+		return
+	}
+	s.redirect(w, r, "/bills/"+billID+"?notice=edited")
 }
 
 func (s *Server) showBill(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +329,7 @@ func (s *Server) postProviderPaid(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrNotFound):
 		http.NotFound(w, r)
 	case errors.Is(err, store.ErrInvalid):
-		s.renderBill(w, r, sc, billID, "Choose someone who is on this bill.", http.StatusUnprocessableEntity)
+		s.renderBill(w, r, sc, billID, "Choose someone in this household.", http.StatusUnprocessableEntity)
 	default:
 		s.fail(w, r, err)
 	}
@@ -313,7 +402,11 @@ func (s *Server) renderBillForm(w http.ResponseWriter, r *http.Request, sc scope
 		form.SplitMethod = "equal"
 	}
 	s.applySplitPreview(&form, people, sc.Household.Currency)
-	v := s.shell(r, sc, "Record a bill", "bills")
+	title := "Record a bill"
+	if form.Editing {
+		title = "Edit bill"
+	}
+	v := s.shell(r, sc, title, "bills")
 	v.Content = "bill-new"
 	v.Utilities = utilityOptions(utils)
 	v.People = people
@@ -391,6 +484,7 @@ func (s *Server) applySplitPreview(form *BillForm, people []Person, currency str
 
 func readBillForm(r *http.Request, people []Person) BillForm {
 	form := BillForm{
+		Editing:     r.FormValue("editing") == "1",
 		UtilityID:   r.FormValue("utility_id"),
 		PeriodStart: r.FormValue("period_start"),
 		PeriodEnd:   r.FormValue("period_end"),
@@ -469,6 +563,52 @@ func includedPeople(form BillForm, people []Person) []Person {
 		}
 	}
 	return out
+}
+
+func formFromBill(b store.Bill, copyNext bool) BillForm {
+	start, end, due := b.PeriodStart, b.PeriodEnd, b.DueDate
+	if copyNext {
+		start, end, due = adjacentPeriod(start, end, due)
+	}
+	form := BillForm{
+		UtilityID:      b.UtilityID,
+		PeriodStart:    start.Format("2006-01-02"),
+		PeriodEnd:      end.Format("2006-01-02"),
+		DueDate:        due.Format("2006-01-02"),
+		Amount:         money.Input(b.AmountCents),
+		Notes:          b.Notes,
+		SplitMethod:    b.SplitMethod,
+		IncludesSent:   true,
+		AppliedUtility: b.UtilityID,
+		Include:        map[string]bool{},
+		Paid:           map[string]bool{},
+		Weights:        map[string]string{},
+		Amounts:        map[string]string{},
+	}
+	if !copyNext {
+		form.Editing = true
+		form.BillID = b.ID
+		form.PaidBy = b.PaidByParticipantID
+		form.InvoiceRef = b.InvoiceRef
+	}
+	for _, sh := range b.Shares {
+		form.Include[sh.ParticipantID] = true
+		if sh.Weight > 0 {
+			form.Weights[sh.ParticipantID] = strconv.Itoa(sh.Weight)
+		}
+		form.Amounts[sh.ParticipantID] = money.Input(sh.AmountCents)
+	}
+	return form
+}
+
+func adjacentPeriod(start, end, due time.Time) (time.Time, time.Time, time.Time) {
+	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	end = time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
+	due = time.Date(due.Year(), due.Month(), due.Day(), 0, 0, 0, 0, due.Location())
+	span := int(end.Sub(start).Round(24*time.Hour) / (24 * time.Hour))
+	nextStart := end.AddDate(0, 0, 1)
+	shift := int(nextStart.Sub(start).Round(24*time.Hour) / (24 * time.Hour))
+	return nextStart, nextStart.AddDate(0, 0, span), due.AddDate(0, 0, shift)
 }
 
 func defaultBillForm() BillForm {

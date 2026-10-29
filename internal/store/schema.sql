@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS utilities (
     name TEXT NOT NULL,
     provider TEXT NOT NULL DEFAULT '',
     category TEXT NOT NULL,
+    repeats INTEGER NOT NULL DEFAULT 0 CHECK (repeats IN (0, 1)),
     created_at TEXT NOT NULL
 );
 

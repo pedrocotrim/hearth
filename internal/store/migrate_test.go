@@ -86,4 +86,86 @@ func TestMigrateV1KeepsBills(t *testing.T) {
 	if bill.Status() != "settled" {
 		t.Fatal(bill.Status())
 	}
+	var repeats int
+	if err := st.db.QueryRowContext(ctx, `SELECT repeats FROM utilities WHERE id = 'util'`).Scan(&repeats); err != nil {
+		t.Fatal(err)
+	}
+	if repeats != 0 {
+		t.Fatalf("repeats %d", repeats)
+	}
+}
+
+func TestMigrateV3AddsRepeats(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hearth.db")
+	db, err := sql.Open("sqlite", dsn(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`CREATE TABLE users (
+			id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT NOT NULL, password_hash TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE households (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, currency TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE memberships (
+			household_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL,
+			PRIMARY KEY (household_id, user_id))`,
+		`CREATE TABLE participants (
+			id TEXT PRIMARY KEY, household_id TEXT NOT NULL, name TEXT NOT NULL, email TEXT, user_id TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)`,
+		`CREATE TABLE utilities (
+			id TEXT PRIMARY KEY, household_id TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL DEFAULT '', category TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE bills (
+			id TEXT PRIMARY KEY, household_id TEXT NOT NULL, utility_id TEXT NOT NULL,
+			period_start TEXT NOT NULL, period_end TEXT NOT NULL, due_date TEXT NOT NULL,
+			amount_cents INTEGER NOT NULL, paid_by_participant_id TEXT, invoice_ref TEXT NOT NULL DEFAULT '',
+			notes TEXT NOT NULL DEFAULT '', split_method TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE bill_shares (
+			bill_id TEXT NOT NULL, participant_id TEXT NOT NULL, amount_cents INTEGER NOT NULL, weight INTEGER NOT NULL DEFAULT 0,
+			paid INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (bill_id, participant_id))`,
+		`CREATE TABLE share_payments (
+			id TEXT PRIMARY KEY, bill_id TEXT NOT NULL, participant_id TEXT NOT NULL, amount_cents INTEGER NOT NULL,
+			note TEXT NOT NULL DEFAULT '', recorded_by TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`,
+		`INSERT INTO schema_migrations (version, applied_at) VALUES (3, '2026-01-01T00:00:00Z')`,
+		`INSERT INTO users (id, email, name, password_hash, created_at) VALUES ('userana', 'ana@example.com', 'Ana', 'hash', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO households (id, name, currency, created_at) VALUES ('home', 'Home', 'USD', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO memberships (household_id, user_id, role, created_at) VALUES ('home', 'userana', 'owner', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO participants (id, household_id, name, email, user_id, active, created_at) VALUES ('ana', 'home', 'Ana', 'ana@example.com', 'userana', 1, '2026-01-01T00:00:00Z')`,
+		`INSERT INTO utilities (id, household_id, name, category, created_at) VALUES ('util', 'home', 'Electricity', 'electric', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO bills (id, household_id, utility_id, period_start, period_end, due_date, amount_cents, paid_by_participant_id, split_method, created_by, created_at)
+			VALUES ('bill', 'home', 'util', '2026-10-01', '2026-10-31', '2026-11-10', 10000, 'ana', 'equal', 'userana', '2026-01-02T00:00:00Z')`,
+		`INSERT INTO bill_shares (bill_id, participant_id, amount_cents, weight, paid) VALUES ('bill', 'ana', 10000, 1, 0)`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(stmt, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var version, repeats int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 4`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 1 {
+		t.Fatalf("version 4 rows %d", version)
+	}
+	if err := st.db.QueryRowContext(ctx, `SELECT repeats FROM utilities WHERE id = 'util'`).Scan(&repeats); err != nil {
+		t.Fatal(err)
+	}
+	if repeats != 0 {
+		t.Fatalf("repeats %d", repeats)
+	}
+	bill, err := st.Bill(ctx, "home", "bill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bill.AmountCents != 10000 || bill.PaidByName != "Ana" {
+		t.Fatalf("bill %+v", bill)
+	}
 }
