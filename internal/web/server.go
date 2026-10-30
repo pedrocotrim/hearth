@@ -129,6 +129,8 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /utilities", s.auth(s.utilities))
 	mux.HandleFunc("POST /utilities", s.auth(s.postUtility))
+	mux.HandleFunc("GET /utilities/{utilityID}/edit", s.auth(s.editUtility))
+	mux.HandleFunc("POST /utilities/{utilityID}", s.auth(s.postUpdateUtility))
 	mux.HandleFunc("POST /utilities/{utilityID}/exemptions", s.auth(s.postExemptions))
 	mux.HandleFunc("POST /utilities/{utilityID}/repeat", s.auth(s.postRepeat))
 

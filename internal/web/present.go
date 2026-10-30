@@ -68,6 +68,8 @@ func noticeText(code string) string {
 		return "Added. They can be included on a bill without an account."
 	case "utility":
 		return "Utility added."
+	case "utility-edited":
+		return "Utility updated."
 	case "exemptions":
 		return "Default exemptions saved."
 	case "repeat":
@@ -248,10 +250,11 @@ func buildBalances(selfID, currency string, bills []store.Bill) ([]BalanceLine, 
 }
 
 type itemizedDebtEntry struct {
-	fromID string
-	toID   string
-	line   ItemizedDebtLine
-	cents  int64
+	fromID      string
+	toID        string
+	providerKey string
+	line        ItemizedDebtLine
+	cents       int64
 }
 
 type debtPair struct {
@@ -262,13 +265,18 @@ type debtPair struct {
 func buildItemizedDebts(currency string, bills []store.Bill) map[debtPair][]ItemizedDebtLine {
 	var items []itemizedDebtEntry
 	for _, b := range bills {
+		provider := strings.TrimSpace(b.Provider)
+		if provider == "" {
+			provider = b.UtilityName
+		}
 		for _, debt := range b.Debts() {
 			items = append(items, itemizedDebtEntry{
-				fromID: debt.FromID,
-				toID:   debt.ToID,
-				cents:  debt.Cents,
+				fromID:      debt.FromID,
+				toID:        debt.ToID,
+				providerKey: strings.ToLower(provider),
+				cents:       debt.Cents,
 				line: ItemizedDebtLine{
-					Text:   b.UtilityName + " (" + formatPeriod(b.PeriodStart, b.PeriodEnd) + ")",
+					Text:   provider,
 					Amount: money.Format(debt.Cents, currency),
 				},
 			})
@@ -285,6 +293,9 @@ func buildItemizedDebts(currency string, bills []store.Bill) map[debtPair][]Item
 		}
 		if items[i].fromID != items[j].fromID {
 			return items[i].fromID < items[j].fromID
+		}
+		if items[i].providerKey != items[j].providerKey {
+			return items[i].providerKey < items[j].providerKey
 		}
 		return items[i].line.Text < items[j].line.Text
 	})
@@ -313,14 +324,33 @@ func buildItemizedDebts(currency string, bills []store.Bill) map[debtPair][]Item
 		reduceDebtItems(items, reverse, cancel)
 		start = end
 	}
-	out := make(map[debtPair][]ItemizedDebtLine)
+	type providerDebt struct {
+		line  ItemizedDebtLine
+		cents int64
+	}
+	byProvider := make(map[debtPair]map[string]*providerDebt)
 	for _, item := range items {
 		if item.cents == 0 {
 			continue
 		}
-		item.line.Amount = money.Format(item.cents, currency)
 		key := debtPair{fromID: item.fromID, toID: item.toID}
-		out[key] = append(out[key], item.line)
+		if byProvider[key] == nil {
+			byProvider[key] = make(map[string]*providerDebt)
+		}
+		group := byProvider[key][item.providerKey]
+		if group == nil {
+			group = &providerDebt{line: item.line}
+			byProvider[key][item.providerKey] = group
+		}
+		group.cents += item.cents
+	}
+	out := make(map[debtPair][]ItemizedDebtLine, len(byProvider))
+	for key, providers := range byProvider {
+		for _, group := range providers {
+			group.line.Amount = money.Format(group.cents, currency)
+			out[key] = append(out[key], group.line)
+		}
+		sort.Slice(out[key], func(i, j int) bool { return out[key][i].Text < out[key][j].Text })
 	}
 	return out
 }

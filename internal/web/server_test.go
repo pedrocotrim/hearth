@@ -132,12 +132,12 @@ func TestHouseholdBillFlow(t *testing.T) {
 
 	_, home = ana.followPath("/")
 	if !strings.Contains(home, "Luis owes Ana") || !strings.Contains(home, "$50.00") ||
-		!strings.Contains(home, "Electricity (Oct 1–31, 2026)") {
+		!strings.Contains(home, "City Power") {
 		t.Fatalf("ledger:\n%s", home)
 	}
 	parentAt := strings.Index(home, `<li class="yours">`)
 	itemListAt := strings.Index(home, `<ul class="balance-items">`)
-	debtAt := strings.Index(home, "Electricity (Oct 1–31, 2026)")
+	debtAt := strings.Index(home, "City Power")
 	if parentAt < 0 || itemListAt < parentAt || debtAt < itemListAt {
 		t.Fatalf("bill item is not nested inside the existing who-owes-whom list item:\n%s", home)
 	}
@@ -169,7 +169,7 @@ func TestHouseholdBillFlow(t *testing.T) {
 	}, "marked as paid")
 
 	_, settled := ana.followPath("/")
-	if !strings.Contains(settled, "Everyone is square.") || strings.Contains(settled, "Luis owes Ana") || strings.Contains(settled, "Electricity (Oct 1–31, 2026) · Luis owes Ana") {
+	if !strings.Contains(settled, "Everyone is square.") || strings.Contains(settled, "Luis owes Ana") || strings.Contains(settled, "City Power") {
 		t.Fatalf("settled ledger:\n%s", settled)
 	}
 	_, finalBill := ana.followPath("/bills/" + bills[0].ID)
@@ -233,12 +233,30 @@ func TestGuestIsExemptFromUtility(t *testing.T) {
 	if err != nil || len(utils) != 1 {
 		t.Fatal(err)
 	}
-	status, body, _ := ana.get("/bills/split-fields?utility_id=" + utils[0].ID + "&amount=10.00&split_method=equal")
-	if status != http.StatusOK || !strings.Contains(body, "Ana") || strings.Contains(body, ">Kid<") {
-		t.Fatalf("split preview %d\n%s", status, body)
+	_, utilityPage, _ := ana.get("/utilities")
+	if strings.Contains(utilityPage, "Save defaults") || strings.Contains(utilityPage, "Save repeat") ||
+		!strings.Contains(utilityPage, `hx-post="/utilities/`+utils[0].ID+`/exemptions"`) ||
+		!strings.Contains(utilityPage, `hx-post="/utilities/`+utils[0].ID+`/repeat"`) {
+		t.Fatalf("utility settings do not autosave:\n%s", utilityPage)
 	}
-	if strings.Contains(body, "include_"+kid) && strings.Contains(body, `name="include_`+kid+`" value="1" checked`) {
-		t.Fatalf("kid should start unchecked\n%s", body)
+	status, body, _ := ana.postHX("/utilities/"+utils[0].ID+"/exemptions", url.Values{
+		"_csrf":          {csrf(t, utilityPage)},
+		"includes_sent":  {"1"},
+		"include_" + kid: {"1"},
+	})
+	if status != http.StatusOK || body != "" {
+		t.Fatalf("autosave exemptions %d %q", status, body)
+	}
+	exempt, err := st.ExemptionSet(ctx, homes[0].ID, utils[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := exempt[anaPart]; !ok {
+		t.Fatalf("ana should now be excluded: %v", exempt)
+	}
+	status, body, _ = ana.get("/bills/split-fields?utility_id=" + utils[0].ID + "&amount=10.00&split_method=equal")
+	if status != http.StatusOK || strings.Contains(body, ">Ana<") || !strings.Contains(body, ">Kid<") {
+		t.Fatalf("split preview %d\n%s", status, body)
 	}
 }
 
@@ -348,11 +366,28 @@ func TestPayerCopyAndOwnerEdit(t *testing.T) {
 		t.Fatalf("luis edit %d\n%s", status, body)
 	}
 	_, luisBill := luis.followPath("/bills/" + bills[0].ID)
+	_, luisUtilities := luis.followPath("/utilities")
+	if strings.Contains(luisUtilities, "Edit utility") {
+		t.Fatalf("non-owner utility page exposes edit controls:\n%s", luisUtilities)
+	}
 	status, body, _ = luis.post("/bills/"+bills[0].ID, url.Values{
 		"_csrf": {csrf(t, luisBill)},
 	})
 	if status != http.StatusForbidden {
 		t.Fatalf("luis save %d\n%s", status, body)
+	}
+	status, body, _ = luis.get("/utilities/" + utils[0].ID + "/edit")
+	if status != http.StatusForbidden {
+		t.Fatalf("luis utility edit %d\n%s", status, body)
+	}
+	status, body, _ = luis.post("/utilities/"+utils[0].ID, url.Values{
+		"_csrf":    {csrf(t, luisBill)},
+		"name":     {"Power"},
+		"provider": {"Grid Works"},
+		"category": {"internet"},
+	})
+	if status != http.StatusForbidden {
+		t.Fatalf("luis utility save %d\n%s", status, body)
 	}
 
 	_, editPage := ana.followPath("/bills/" + bills[0].ID + "/edit")
@@ -377,6 +412,17 @@ func TestPayerCopyAndOwnerEdit(t *testing.T) {
 	_, updated := ana.followPath("/bills/" + bills[0].ID)
 	if strings.Contains(updated, "Settled") {
 		t.Fatalf("changed share stayed paid\n%s", updated)
+	}
+	_, utilityEdit := ana.followPath("/utilities/" + utils[0].ID + "/edit")
+	ana.submit("/utilities/"+utils[0].ID, url.Values{
+		"_csrf":    {csrf(t, utilityEdit)},
+		"name":     {"Power"},
+		"provider": {"Grid Works"},
+		"category": {"internet"},
+	}, "Utility updated.")
+	_, updatedBill := ana.followPath("/bills/" + bills[0].ID)
+	if !strings.Contains(updatedBill, "<h1>Power</h1>") || !strings.Contains(updatedBill, "Internet · Grid Works") {
+		t.Fatalf("existing bill did not reflect utility update:\n%s", updatedBill)
 	}
 }
 
@@ -447,10 +493,37 @@ func TestProviderPaymentAndMonthlyRepeatHTTP(t *testing.T) {
 	}
 
 	_, utilitiesPage := ana.followPath("/utilities")
-	ana.submit("/utilities/"+util.ID+"/repeat", url.Values{
+	if strings.Contains(utilitiesPage, "Save defaults") || strings.Contains(utilitiesPage, "Save repeat") {
+		t.Fatalf("utility settings still require save buttons:\n%s", utilitiesPage)
+	}
+	status, body, _ := ana.postHX("/utilities/"+util.ID+"/repeat", url.Values{
 		"_csrf":   {csrf(t, utilitiesPage)},
 		"repeats": {"1"},
-	}, "Monthly repeat updated.")
+	})
+	if status != http.StatusOK || body != "" {
+		t.Fatalf("repeat autosave %d %q", status, body)
+	}
+	utils, err := st.Utilities(ctx, homes[0].ID)
+	if err != nil || len(utils) != 1 || !utils[0].Repeats {
+		t.Fatalf("repeat setting not saved: %+v %v", utils, err)
+	}
+	status, body, _ = ana.postHX("/utilities/"+util.ID+"/repeat", url.Values{
+		"_csrf": {csrf(t, utilitiesPage)},
+	})
+	if status != http.StatusOK || body != "" {
+		t.Fatalf("repeat disable autosave %d %q", status, body)
+	}
+	utils, err = st.Utilities(ctx, homes[0].ID)
+	if err != nil || len(utils) != 1 || utils[0].Repeats {
+		t.Fatalf("repeat disable not saved: %+v %v", utils, err)
+	}
+	status, body, _ = ana.postHX("/utilities/"+util.ID+"/repeat", url.Values{
+		"_csrf":   {csrf(t, utilitiesPage)},
+		"repeats": {"1"},
+	})
+	if status != http.StatusOK || body != "" {
+		t.Fatalf("repeat re-enable autosave %d %q", status, body)
+	}
 	ana.followPath("/")
 	bills, err := st.Bills(ctx, homes[0].ID)
 	if err != nil || len(bills) < 3 {
@@ -568,7 +641,15 @@ func (b *browser) post(path string, form url.Values) (int, string, http.Header) 
 	return b.send(http.MethodPost, path, form)
 }
 
+func (b *browser) postHX(path string, form url.Values) (int, string, http.Header) {
+	return b.sendWithHeaders(http.MethodPost, path, form, http.Header{"HX-Request": []string{"true"}})
+}
+
 func (b *browser) send(method, path string, form url.Values) (int, string, http.Header) {
+	return b.sendWithHeaders(method, path, form, nil)
+}
+
+func (b *browser) sendWithHeaders(method, path string, form url.Values, headers http.Header) (int, string, http.Header) {
 	b.t.Helper()
 	var reader io.Reader
 	if form != nil {
@@ -584,6 +665,11 @@ func (b *browser) send(method, path string, form url.Values) (int, string, http.
 	}
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {

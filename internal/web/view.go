@@ -52,6 +52,7 @@ type View struct {
 	Bill      BillDetail
 
 	UtilityRows []UtilityRow
+	UtilityID   string
 	MemberRows  []Person
 	InviteRows  []InviteRow
 	InviteURL   string

@@ -289,6 +289,78 @@ func (s *Server) postUtility(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, "/utilities?notice=utility")
 }
 
+func (s *Server) editUtility(w http.ResponseWriter, r *http.Request) {
+	sc, ok := s.mustScope(w, r)
+	if !ok {
+		return
+	}
+	if !sc.owner() {
+		http.Error(w, "Only the household owner can edit a utility.", http.StatusForbidden)
+		return
+	}
+	utilityID := r.PathValue("utilityID")
+	if !token.ValidID(utilityID) {
+		http.NotFound(w, r)
+		return
+	}
+	utils, err := s.store.Utilities(r.Context(), sc.Household.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	for _, utility := range utils {
+		if utility.ID == utilityID {
+			s.renderUtilityEdit(w, r, sc, utility.Name, utility.Provider, utility.Category, "", http.StatusOK)
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Server) postUpdateUtility(w http.ResponseWriter, r *http.Request) {
+	sc, ok := s.mustScope(w, r)
+	if !ok {
+		return
+	}
+	if !sc.owner() {
+		http.Error(w, "Only the household owner can edit a utility.", http.StatusForbidden)
+		return
+	}
+	utilityID := r.PathValue("utilityID")
+	if !token.ValidID(utilityID) {
+		http.NotFound(w, r)
+		return
+	}
+	name, nameOK := cleanName(r.FormValue("name"), 80)
+	provider, providerOK := cleanOptional(r.FormValue("provider"), 80)
+	category := r.FormValue("category")
+	if !nameOK || !providerOK || !validCategory(category) {
+		s.renderUtilityEdit(w, r, sc, strings.TrimSpace(r.FormValue("name")), strings.TrimSpace(r.FormValue("provider")), category, "Enter a utility name and category.", http.StatusUnprocessableEntity)
+		return
+	}
+	err := s.store.UpdateUtility(r.Context(), sc.Household.ID, utilityID, name, provider, category)
+	switch {
+	case err == nil:
+		s.redirect(w, r, "/utilities?notice=utility-edited")
+	case errors.Is(err, store.ErrNotFound):
+		http.NotFound(w, r)
+	default:
+		s.fail(w, r, err)
+	}
+}
+
+func (s *Server) renderUtilityEdit(w http.ResponseWriter, r *http.Request, sc scope, name, provider, category, errMsg string, status int) {
+	v := s.shell(r, sc, "Edit utility", "utilities")
+	v.Content = "utility-edit"
+	v.UtilityID = r.PathValue("utilityID")
+	v.Name = name
+	v.Provider = provider
+	v.SelectedCategory = category
+	v.Categories = categories()
+	v.Error = errMsg
+	s.render(w, status, "app", v)
+}
+
 func (s *Server) postExemptions(w http.ResponseWriter, r *http.Request) {
 	sc, ok := s.mustScope(w, r)
 	if !ok {
@@ -310,10 +382,18 @@ func (s *Server) postExemptions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, store.ErrInvalid) {
+			if r.Header.Get("HX-Request") == "true" {
+				http.Error(w, "Choose people from this household.", http.StatusUnprocessableEntity)
+				return
+			}
 			s.renderUtilities(w, r, sc, "Choose people from this household.", http.StatusUnprocessableEntity)
 			return
 		}
 		s.fail(w, r, err)
+		return
+	}
+	if r.Header.Get("HX-Request") == "true" {
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	s.redirect(w, r, "/utilities?notice=exemptions")
@@ -332,6 +412,10 @@ func (s *Server) postRepeat(w http.ResponseWriter, r *http.Request) {
 	err := s.store.SetRepeats(r.Context(), sc.Household.ID, utilityID, r.FormValue("repeats") == "1")
 	switch {
 	case err == nil:
+		if r.Header.Get("HX-Request") == "true" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		s.redirect(w, r, "/utilities?notice=repeat")
 	case errors.Is(err, store.ErrNotFound):
 		http.NotFound(w, r)

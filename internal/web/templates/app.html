@@ -553,6 +553,34 @@
 {{end}}
 {{end}}
 
+{{define "utility-edit"}}
+<header class="page-head">
+  <div>
+    <h1>Edit utility</h1>
+    <p class="lede">Changes to the utility's name, provider, or category also update its existing bills.</p>
+  </div>
+</header>
+{{template "alert" .}}
+<form method="post" action="/utilities/{{.UtilityID}}" class="panel stack">
+  <input type="hidden" name="_csrf" value="{{.CSRF}}">
+  <div class="dates">
+    <label>Name<input name="name" required maxlength="80" value="{{.Name}}"></label>
+    <label>Provider<input name="provider" maxlength="80" value="{{.Provider}}"></label>
+    <label>Category
+      <select name="category" required>
+        {{range .Categories}}
+        <option value="{{.Value}}" {{if eq $.SelectedCategory .Value}}selected{{end}}>{{.Label}}</option>
+        {{end}}
+      </select>
+    </label>
+  </div>
+  <div class="cluster">
+    <button class="btn primary" type="submit">Save changes</button>
+    <a class="btn" href="/utilities">Cancel</a>
+  </div>
+</form>
+{{end}}
+
 {{define "utilities"}}
 <header class="page-head">
   <div>
@@ -592,25 +620,29 @@
 <div class="stack">
   {{range .UtilityRows}}
   <section class="panel stack">
-    <h2>{{.Name}}</h2>
+    <div class="section-head">
+      <h2>{{.Name}}</h2>
+      {{if $.IsOwner}}<a class="btn" href="/utilities/{{.ID}}/edit">Edit utility</a>{{end}}
+    </div>
     <p class="muted">{{.Provider}} · {{.Category}}</p>
-    <form method="post" action="/utilities/{{.ID}}/exemptions" class="stack">
+    <form method="post" action="/utilities/{{.ID}}/exemptions" class="stack"
+      hx-post="/utilities/{{.ID}}/exemptions" hx-trigger="change" hx-target="#utility-feedback-{{.ID}}" hx-swap="innerHTML">
       <input type="hidden" name="_csrf" value="{{$.CSRF}}">
       <input type="hidden" name="includes_sent" value="1">
-      <p class="fine">Everyone starts checked. Uncheck someone to leave them off a new bill for this utility.</p>
+      <p class="fine">Changes to who shares this utility are saved immediately and affect new bills.</p>
       <div class="people-grid">
         {{range .People}}
         <label class="check"><input type="checkbox" name="include_{{.ID}}" value="1" {{if .Included}}checked{{end}}> {{.Name}}</label>
         {{end}}
       </div>
-      <button class="btn" type="submit">Save defaults</button>
     </form>
-    <form method="post" action="/utilities/{{.ID}}/repeat" class="stack">
+    <form method="post" action="/utilities/{{.ID}}/repeat" class="stack"
+      hx-post="/utilities/{{.ID}}/repeat" hx-trigger="change" hx-target="#utility-feedback-{{.ID}}" hx-swap="innerHTML">
       <input type="hidden" name="_csrf" value="{{$.CSRF}}">
       <label class="check"><input type="checkbox" name="repeats" value="1" {{if .Repeats}}checked{{end}}> Repeat every month</label>
       <p class="fine">After a period starts, opening Hearth copies the latest bill for this utility, moves the dates forward one month, and leaves the new bill unpaid.</p>
-      <button class="btn" type="submit">Save repeat</button>
     </form>
+    <p id="utility-feedback-{{.ID}}" class="field-error utility-feedback" role="status" aria-live="polite"></p>
   </section>
   {{end}}
 </div>

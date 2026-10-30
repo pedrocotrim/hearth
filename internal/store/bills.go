@@ -33,6 +33,22 @@ func (s *Store) CreateUtility(ctx context.Context, householdID, name, provider, 
 	return Utility{ID: id, HouseholdID: householdID, Name: name, Provider: provider, Category: category, CreatedAt: now}, nil
 }
 
+func (s *Store) UpdateUtility(ctx context.Context, householdID, utilityID, name, provider, category string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE utilities SET name = ?, provider = ?, category = ? WHERE id = ? AND household_id = ?`,
+		name, provider, category, utilityID, householdID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) Utilities(ctx context.Context, householdID string) ([]Utility, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, household_id, name, provider, category, repeats, created_at FROM utilities WHERE household_id = ? ORDER BY name COLLATE NOCASE`, householdID)
 	if err != nil {

@@ -9,6 +9,16 @@
     }
   });
 
+  function showUtilityRequestError(event) {
+    var target = event.detail.target;
+    if (!target || !target.classList.contains("utility-feedback")) return;
+    var response = event.detail.xhr && event.detail.xhr.responseText;
+    target.textContent = response ? response.trim() : "Could not save this utility setting. Try again.";
+  }
+
+  document.addEventListener("htmx:responseError", showUtilityRequestError);
+  document.addEventListener("htmx:sendError", showUtilityRequestError);
+
   function formatCents(cents, symbol) {
     var sign = "";
     if (cents < 0) {

@@ -86,6 +86,40 @@ func TestPayerOutsideTheSplit(t *testing.T) {
 	}
 }
 
+func TestUpdateUtilityChangesExistingBillDisplay(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	user, home, participant := testHousehold(t, st)
+	util := testUtility(t, st, home)
+	billID, err := st.CreateBill(ctx, NewBill{
+		HouseholdID: home,
+		UtilityID:   util,
+		PeriodStart: date(2026, 1, 1),
+		PeriodEnd:   date(2026, 1, 31),
+		DueDate:     date(2026, 2, 10),
+		AmountCents: 5000,
+		SplitMethod: "equal",
+		CreatedBy:   user,
+		Shares:      []NewShare{{ParticipantID: participant, AmountCents: 5000}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateUtility(ctx, home, util, "Power", "Grid Works", "electric"); err != nil {
+		t.Fatal(err)
+	}
+	bill, err := st.Bill(ctx, home, billID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bill.UtilityName != "Power" || bill.Provider != "Grid Works" || bill.Category != "electric" {
+		t.Fatalf("updated bill utility metadata: %+v", bill)
+	}
+	if err := st.UpdateUtility(ctx, "another-household", util, "Wrong", "", "water"); err != ErrNotFound {
+		t.Fatalf("cross-household update error = %v, want %v", err, ErrNotFound)
+	}
+}
+
 func TestUpdateBillKeepsUnchangedPaidFlags(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
